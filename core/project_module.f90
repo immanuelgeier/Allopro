@@ -1,0 +1,586 @@
+module project_module
+
+implicit none
+
+!=========================================================
+! REPLICATE
+!=========================================================
+type :: replicate_type
+
+    character(400) :: dcd_dir
+    integer :: ndcd
+
+    character(400), allocatable :: dcd_files(:)
+
+    integer,allocatable ::  ignore_first_per_dcd(:) 
+    integer,allocatable ::  ignore_last_per_dcd(:) 
+
+    integer,allocatable :: nframes_per_dcd_raw(:)
+    integer,allocatable :: nframes_per_dcd_use(:)
+    
+    integer :: nframes_per_rep_use = 0
+    
+    integer :: offset_start,offset_end
+
+    logical :: consistent_nframes_across_rep_raw = .true.
+    logical :: consistent_nframes_across_rep_use = .true.
+    integer :: nlast_natom_ignore
+    integer :: nfirst_natom_to_read
+    integer :: n_frames_use_total
+end type
+
+
+
+
+!=========================================================
+! STATE
+!=========================================================
+type :: state_type
+
+    character(400) :: name = ''
+    character(400) :: pdb_ref = ''
+    character(400) :: domains_ref = ''
+    
+    integer :: nrep = 0
+
+    type(replicate_type), allocatable :: rep(:)
+
+    logical :: consistent_nframes_per_rep_across_state_use = .true.
+
+end type state_type
+
+
+!=========================================================
+! PROJECT
+!=========================================================
+type :: project_type
+    character(400) :: rootdir = ''
+    integer :: nstate = 0
+    type(state_type), allocatable :: state(:)
+end type project_type
+
+
+contains
+
+
+!=========================================================
+! LOAD PROJECT (ENTRY POINT)
+!=========================================================
+subroutine load_project_structure(project)
+
+    implicit none
+    type(project_type), intent(inout) :: project
+    integer :: i
+    character(400) :: env
+
+    call get_environment_variable("MDGRAPH_PROJECT", env)
+
+    if (len_trim(env) == 0) then
+        write(0,*) 'ERROR: MDGRAPH_PROJECT not set'
+        stop
+    end if
+
+    project%rootdir = trim(env)
+
+    call read_state_list(project)
+
+    ! IMPORTANT ORDER
+    do i = 1, project%nstate
+        call read_state_config(project, i)
+    end do
+
+    do i = 1, project%nstate
+        call read_replicate_list(project, i)
+    end do
+
+    !call print_project_summary(project)
+
+end subroutine load_project_structure
+
+
+!=========================================================
+! READ STATE LIST
+!=========================================================
+subroutine read_state_list(project)
+
+    implicit none
+    type(project_type), intent(inout) :: project
+
+    integer :: io, n, i
+    character(400) :: line, filename
+
+    
+    filename = trim(project%rootdir)//'/input'//'/state_list.dat'
+
+    open(10,file=filename,status='old',iostat=io)
+    if(io /= 0) then
+        write(0,*) 'cannot open:',trim(filename)
+        stop
+    end if
+
+    n = 0
+    do
+        read(10,'(A)',iostat=io) line
+        if(io /= 0) exit
+        if(trim(line) == 'END') exit
+        n = n + 1
+    end do
+
+    if(n == 0) then
+        write(0,*) 'empty state list'
+        stop
+    end if
+
+    project%nstate = n
+    allocate(project%state(n))
+
+    rewind(10)
+
+    do i=1,n
+        read(10,'(A)') project%state(i)%name
+    end do
+
+    close(10)
+
+end subroutine read_state_list
+
+
+!=========================================================
+! READ STATE CONFIG (FIXED)
+!=========================================================
+subroutine read_state_config(project, istate)
+
+    implicit none
+    type(project_type), intent(inout) :: project
+    integer, intent(in) :: istate
+    character(len=500) :: key, value
+    integer :: ios, pos
+    character(400) :: filename, line
+    integer :: io
+
+    filename = trim(project%rootdir)//'/input/'// &
+           trim(project%state(istate)%name)//'/state_config.dat'
+           
+    open(20,file=filename,status='old',iostat=io)
+    if(io /= 0) then
+        write(0,*) 'ERROR: cannot open state config:',trim(filename)
+        stop
+    end if
+
+    project%state(istate)%pdb_ref = ''
+
+
+
+do
+    read(20,'(A)',iostat=ios) line
+    if (ios /= 0) exit
+
+    line = adjustl(trim(line))
+
+    if (line == 'END') exit
+
+    pos = index(line,' ')
+    if (pos == 0) cycle
+
+    key   = adjustl(line(:pos-1))
+    value = adjustl(line(pos+1:))
+
+    select case (trim(key))
+
+    case('pdb')
+        project%state(istate)%pdb_ref = trim(value)
+
+    case('domains')
+        project%state(istate)%domains_ref = trim(value)
+
+    case default
+        ! ignore unknown keys
+    end select
+
+end do
+
+    close(20)
+
+    if(len_trim(project%state(istate)%pdb_ref) == 0) then
+        write(0,*) 'ERROR: no pdb found for state:', trim(project%state(istate)%name)
+        stop
+    end if
+
+end subroutine read_state_config
+
+
+!=========================================================
+! REPLICATES
+!=========================================================
+subroutine read_replicate_list(project,istate)
+
+    implicit none
+    type(project_type), intent(inout) :: project
+    integer, intent(in) :: istate
+
+    integer :: io, nrep, i
+    character(400) :: filename, state_dir, line
+
+    state_dir = trim(project%rootdir)//'/input'//'/'//trim(project%state(istate)%name)
+    filename = trim(state_dir)//'/dcd_dir_list.dat'
+
+    open(11,file=filename,status='old',iostat=io)
+    if(io /= 0) then
+        write(0,*) 'cannot open:',trim(filename)
+        stop
+    end if
+
+    nrep = 0
+    do
+        read(11,'(A)',iostat=io) line
+        if(io /= 0) exit
+        if(trim(line) == 'END') exit
+        nrep = nrep + 1
+    end do
+
+    project%state(istate)%nrep = nrep
+    allocate(project%state(istate)%rep(nrep))
+
+    rewind(11)
+
+    do i=1,nrep
+        read(11,'(A)') project%state(istate)%rep(i)%dcd_dir
+        call read_dcd_file_list(project,istate,i)
+    end do
+
+    close(11)
+
+end subroutine read_replicate_list
+
+
+!=========================================================
+! DCD FILE LIST
+!=========================================================
+subroutine read_dcd_file_list(project,istate,irep)
+
+    implicit none
+    type(project_type), intent(inout) :: project
+
+    integer, intent(in) :: istate, irep
+    integer :: io, ndcd, i
+    character(400) :: filename, line
+    character(20) :: repname
+
+    write(repname,'("replicate_",I0)') irep
+
+    filename = trim(project%rootdir)//'/input'//'/'// &
+               trim(project%state(istate)%name)//'/'// &
+               trim(repname)//'/dcd_file_list.dat'
+
+    open(12,file=filename,status='old',iostat=io)
+    if(io /= 0) then
+        write(0,*) 'cannot open:',trim(filename)
+        stop
+    end if
+
+    ndcd = 0
+    do
+        read(12,'(A)',iostat=io) line
+        if(io /= 0) exit
+        if(trim(line) == 'END') exit
+        ndcd = ndcd + 1
+    end do
+
+    project%state(istate)%rep(irep)%ndcd = ndcd
+    allocate(project%state(istate)%rep(irep)%dcd_files(ndcd))
+
+    rewind(12)
+
+    do i=1,ndcd
+        read(12,'(A)') project%state(istate)%rep(irep)%dcd_files(i)
+    end do
+
+    close(12)
+
+end subroutine read_dcd_file_list
+
+
+!=========================================================
+! SUMMARY
+!=========================================================
+subroutine print_project_summary(project)
+
+    implicit none
+    type(project_type), intent(in) :: project
+    integer :: i, j,k
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'PROJECT SUMMARY'
+    write(0,*) '================================'
+
+    write(0,*) 'states:',project%nstate
+
+    do i=1,project%nstate
+        write(0,*)
+        write(0,*) 'state:',trim(project%state(i)%name)
+        write(0,*) 'pdb  :',trim(project%state(i)%pdb_ref)
+        write(0,*) 'domains :',trim(project%state(i)%domains_ref)
+        write(0,*) 'replicates:',project%state(i)%nrep
+        !pause
+        do j=1,project%state(i)%nrep
+            
+            write(0,*) '     rep',j
+            !write(0,*) allocated(project%state(i)%rep(j)%ignore_first_per_dcd),shape(project%state(i)%rep(j)%ignore_first_per_dcd)
+            !pause
+            do k=1,min(3,project%state(i)%rep(j)%ndcd)
+                write(0,*) '     number frames to ignore first per dcd' ,project%state(i)%rep(j)%ignore_first_per_dcd(k),'frames'
+                write(0,*) '     number frames to ignore last per dcd ' ,project%state(i)%rep(j)%ignore_last_per_dcd(k), 'frames'
+                write(0,*) '     total number of frames per dcd'        ,project%state(i)%rep(j)%nframes_per_dcd_raw(k)
+                write(0,*) '     number frames to use per dcd:'         ,project%state(i)%rep(j)%nframes_per_dcd_use(k)
+            end do
+            write(0,*) '...'
+            
+            k=project%state(i)%rep(j)%ndcd
+            
+               write(0,*) '     number frames to ignore first per dcd' ,project%state(i)%rep(j)%ignore_first_per_dcd(k),'frames'
+                write(0,*) '     number frames to ignore last per dcd ' ,project%state(i)%rep(j)%ignore_last_per_dcd(k), 'frames'
+                write(0,*) '     total number of frames per dcd'        ,project%state(i)%rep(j)%nframes_per_dcd_raw(k)
+                write(0,*) '     number frames to use per dcd:'         ,project%state(i)%rep(j)%nframes_per_dcd_use(k)
+            
+            
+            write(0,*) '     number of remaining frames per rep:'   ,project%state(i)%rep(j)%nframes_per_rep_use
+            write(0,*) '     dir :',trim(project%state(i)%rep(j)%dcd_dir)
+            write(0,*) '     ndcd:',project%state(i)%rep(j)%ndcd
+            do k=1,min(3,project%state(i)%rep(j)%ndcd)
+                write(0,*) 'file:',trim(project%state(i)%rep(j)%dcd_files(k))
+                
+            end do
+            write(0,*) '...'
+            write(0,*) 'file:',trim(project%state(i)%rep(j)%dcd_files(  project%state(i)%rep(j)%ndcd  ))
+            write(0,*) 'consistent nframes across dcds in rep raw:', &
+            project%state(i)%rep(j)%consistent_nframes_across_rep_raw
+            write(0,*) 'consistent nframes across dcds in rep to use:', &
+            project%state(i)%rep(j)%consistent_nframes_across_rep_use
+         end do
+
+    write(0,*) 'consistent frames across reps in state to use:', &
+    project%state(i)%consistent_nframes_per_rep_across_state_use
+    end do
+
+    write(0,*)
+  
+
+end subroutine print_project_summary
+
+subroutine analyze_project_frames(project)
+
+    use dcd_header_reader
+    implicit none
+
+    type(project_type), intent(inout) :: project
+    type(dcd_header_info_type) :: info
+
+    integer :: istate
+    integer :: irep
+    integer :: idcd
+
+    integer :: ref_nframes_dcd
+    integer :: ref_nframes_dcd_use
+    integer :: ref_nframes_rep
+
+    integer :: nframes_use, nframe_use_rep
+
+    logical :: state_consistent
+
+    do istate = 1, project%nstate
+
+        state_consistent = .true.
+        ref_nframes_rep  = -1
+        
+        do irep = 1, project%state(istate)%nrep
+
+            nframe_use_rep = 0   ! Reset per Replikate
+            project%state(istate)%rep(irep)%n_frames_use_total = 0 ! Initialisieren
+
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .true.
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .true.
+
+            ref_nframes_dcd     = -1
+            ref_nframes_dcd_use = -1
+
+            do idcd = 1, project%state(istate)%rep(irep)%ndcd
+
+                call read_dcd_header_info( &
+                    project%state(istate)%rep(irep)%dcd_files(idcd), &
+                    info )
+
+                project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
+                    info%nframes_dcd_found_in_dcd
+
+                ! ----------------------------
+                ! Compute USE per DCD
+                ! ----------------------------
+                nframes_use = info%nframes_dcd_found_in_dcd &
+                    - project%state(istate)%rep(irep)%ignore_first_per_dcd(idcd) &
+                    - project%state(istate)%rep(irep)%ignore_last_per_dcd(idcd)
+
+                if (nframes_use < 0) nframes_use = 0 
+
+                nframe_use_rep = nframe_use_rep + nframes_use
+                project%state(istate)%rep(irep)%nframes_per_dcd_use(idcd) = nframes_use
+
+                ! ----------------------------
+                ! RAW & USE consistency check within replicate
+                ! ----------------------------
+                if (idcd == 1) then
+                    ! FIX: Hier stand vorher fälschlicherweise das gesamte Array auf der linken Seite.
+                    ! Es muss spezifisch das Element (idcd) zugewiesen werden.
+                    project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
+                        info%nframes_dcd_found_in_dcd
+
+                    ref_nframes_dcd     = info%nframes_dcd_found_in_dcd
+                    ref_nframes_dcd_use = nframes_use
+                else
+                    if (info%nframes_dcd_found_in_dcd /= ref_nframes_dcd) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .false.
+                    end if
+
+                    if (nframes_use /= ref_nframes_dcd_use) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .false.
+                    end if
+                end if
+
+            end do
+
+            ! Zuweisung der aggregierten nutzbaren Frames für dieses Replikat
+            project%state(istate)%rep(irep)%nframes_per_rep_use = nframe_use_rep
+            project%state(istate)%rep(irep)%n_frames_use_total  = nframe_use_rep
+
+            ! ----------------------------
+            ! Compare reps within state
+            ! ----------------------------
+            if (irep == 1) then
+                ref_nframes_rep = nframe_use_rep
+            else
+                if (project%state(istate)%rep(irep)%nframes_per_rep_use /= ref_nframes_rep) then
+                    state_consistent = .false.
+                end if
+            end if
+
+        end do
+
+        ! Globaler Konsistenz-Check für diesen Zustand über alle seine Replikate hinweg
+        project%state(istate)%consistent_nframes_per_rep_across_state_use = state_consistent
+
+    end do
+
+end subroutine analyze_project_frames
+
+subroutine analyze_project_frames_old(project)
+
+    use dcd_header_reader
+    implicit none
+
+    type(project_type), intent(inout) :: project
+    type(dcd_header_info_type) :: info
+
+    integer :: istate
+    integer :: irep
+    integer :: idcd
+
+    integer :: ref_nframes_dcd
+    integer :: ref_nframes_dcd_use
+    integer :: ref_nframes_rep
+
+    integer :: nframes_use, nframe_use_rep
+
+    logical :: state_consistent
+
+    do istate = 1, project%nstate
+
+        state_consistent = .true.
+        ref_nframes_rep  = -1
+        
+        do irep = 1, project%state(istate)%nrep
+
+            nframe_use_rep = 0   ! <<< FIX: reset per replicate
+
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .true.
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .true.
+
+            ref_nframes_dcd     = -1
+            ref_nframes_dcd_use = -1
+
+            do idcd = 1, project%state(istate)%rep(irep)%ndcd
+
+                call read_dcd_header_info( &
+                    project%state(istate)%rep(irep)%dcd_files(idcd), &
+                    info )
+
+                project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
+                    info%nframes_dcd_found_in_dcd
+
+                ! ----------------------------
+                ! compute USE per DCD
+                ! ----------------------------
+                nframes_use = info%nframes_dcd_found_in_dcd &
+                    - project%state(istate)%rep(irep)%ignore_first_per_dcd(idcd) &
+                    - project%state(istate)%rep(irep)%ignore_last_per_dcd(idcd)
+
+                if (nframes_use < 0) nframes_use = 0   ! <<< FIX: before summation
+
+                nframe_use_rep = nframe_use_rep + nframes_use
+
+                project%state(istate)%rep(irep)%nframes_per_dcd_use(idcd) = nframes_use
+
+                ! ----------------------------
+                ! RAW consistency
+                ! ----------------------------
+                if (idcd == 1) then
+
+                    project%state(istate)%rep(irep)%nframes_per_dcd_raw = &
+                        info%nframes_dcd_found_in_dcd
+
+                    ref_nframes_dcd     = info%nframes_dcd_found_in_dcd
+                    ref_nframes_dcd_use = nframes_use
+
+                else
+
+                    if (info%nframes_dcd_found_in_dcd /= ref_nframes_dcd) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .false.
+                    end if
+
+                    if (nframes_use /= ref_nframes_dcd_use) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .false.
+                    end if
+
+                end if
+
+            end do
+
+            project%state(istate)%rep(irep)%nframes_per_rep_use = nframe_use_rep
+
+            ! ----------------------------
+            ! compare reps within state
+            ! ----------------------------
+            if (irep == 1) then
+
+                ref_nframes_rep = nframe_use_rep
+
+            else
+
+                if (project%state(istate)%rep(irep)%nframes_per_rep_use /= &
+                    ref_nframes_rep) then
+
+                    state_consistent = .false.
+
+                end if
+
+            end if
+
+        end do
+
+        project%state(istate)%consistent_nframes_per_rep_across_state_use = &
+            state_consistent
+
+    end do
+
+end subroutine
+
+end module project_module

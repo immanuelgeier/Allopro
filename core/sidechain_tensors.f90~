@@ -1,0 +1,147 @@
+module sidechain_tensors
+
+
+
+
+
+
+contains
+
+!subroutine prep_direction_vecs_generic(resname, atom_list, &
+!                                       d1, d2, &
+!                                       r_ref, &
+!                                       tv1, tv2, cv, map)
+!  implicit none
+!
+!  character(len=*), intent(in) :: resname
+!  character(len=4), intent(in) :: atom_list(:)
+!  !character(len=4), intent(in) :: d1_pair(2)
+!  !character(len=4), intent(in) :: d2_pair(2)
+!
+!  real(8), intent(in) :: r_ref(:)
+!
+!  real(8), allocatable, intent(out) :: tv1(:,:), tv2(:,:), cv(:,:)
+!  integer, allocatable, intent(out) :: map(:)
+!
+!
+!  real(8), allocatable :: c(:), c2(:)
+!  real(8) :: cog(3), ri(3), d1(3), d2(3),cent(3),v1_initial(3),v2_initial(3),vi(3)
+!  real(8) :: v1(3), v2(3)
+!  real(8) :: norm_c, norm_c2
+!
+!  integer :: i, j, ind_res, n, ia, ib
+!  integer :: idx1, idx2
+!  logical :: found
+!
+!  ! =========================================
+!  ! FIND RESIDUE
+!  ! =========================================
+!  ind_res = -1
+!  do i=1,nres
+!     if (trim(resnames(i)) == trim(resname)) then
+!        ind_res = i
+!        exit
+!     end if
+!  end do
+!  if (ind_res < 0) stop "residue not found"
+!  allocate(map(size(atom_list)))
+!  map=-1
+! ! write(0,*) size(atom_list),acid_start_list(ind_res),acid_start_list(ind_res)+acid_size(ind_res)-1
+!  do j=1,size(atom_list)
+!     do i=acid_start_list(ind_res),acid_start_list(ind_res)+acid_size(ind_res)-1
+!    ! write(0,*) trim( adjustl(atom_id(i))) ,'       ', trim(adjustl(atom_list(j))),i,j 
+!     
+!        if(trim( adjustl(atom_id(i))) == trim(adjustl(atom_list(j)))  ) then
+!        map(j)=i
+!        !exit
+!        end if
+!      
+!     end do
+!  end do
+!  write(0,*)  map,'map',ind_res
+! ! stop
+!  ! =========================================
+!  ! SIZE / ALLOCATION
+!  ! =========================================
+!  n = size(atom_list)
+!
+!
+!  allocate(cv(3,n))
+!  allocate(c(n))
+!  allocate(c2(n))
+!
+!
+!cog = 0.0d0
+!
+!do j=1,n
+!   cog(1) = cog(1) + r_ref(3*j-2)
+!   cog(2) = cog(2) + r_ref(3*j-1)
+!   cog(3) = cog(3) + r_ref(3*j  )
+!end do
+!
+!cog = cog / dble(n)
+!
+!  do i=1,n
+!     ri = r_ref(3*i-2:3*i) - cog
+!     c(i)  = dot_product(ri, d1)
+!     c2(i) = dot_product(ri, d2)
+!     write(0,*) c(i),c2(i),'c raw',ri
+!  end do
+!    write(0,*) d2,'d2'
+!  ! =========================================
+!  ! CENTERING
+!  ! =========================================
+!  write(0,*) c,'c'
+!  write(0,*) c2,'c2'
+!  c  = c  - sum(c)/dble(n)
+!  c2 = c2 - sum(c2)/dble(n)
+!  write(0,*) dot_product(c,c2),'dot_product(c,c2)'
+!
+!  ! =========================================
+!  ! NORMALIZATION (RECONSTRUCTION SPACE)
+!  ! =========================================
+!  v1 = 0.0d0
+!  v2 = 0.0d0
+!
+!  do i=1,n
+!     ri = r_ref(3*i-2:3*i) - cog
+!     v1 = v1 + c(i)*ri
+!     v2 = v2 + c2(i)*ri
+!  end do
+!
+!  norm_c  = sqrt(dot_product(v1,v1))
+!  norm_c2 = sqrt(dot_product(v2,v2))
+!
+!  if (norm_c  > 1d-12) c  = c  / norm_c
+!  if (norm_c2 > 1d-12) c2 = c2 / norm_c2
+!
+!  ! =========================================
+!  ! BUILD OPERATORS
+!  ! =========================================
+!  do i=1,n
+!     tv1(:,i) = c(i)
+!     tv2(:,i) = c2(i)
+!     cv(:,i)  = 1.d0/dble(n)
+!     write(0,*) c(i),c2(i),'c'
+!  end do
+!
+!
+!  map=map-acid_start_list(ind_res)
+!  deallocate( c, c2)
+!
+!end subroutine prep_direction_vecs_generic
+!         
+                   
+   
+
+
+
+
+
+
+
+
+
+
+
+end module sidechain_tensors

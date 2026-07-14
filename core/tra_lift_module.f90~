@@ -1,0 +1,518 @@
+module tra_lift_module
+
+use topology_module
+use time_window_file_mapping
+use time_window_loader
+use sidechains
+use domains_module
+
+implicit none
+
+
+contains
+
+subroutine test_lifting(topologies,sc_lib,dom_lib,project,bidx1,bidx2)
+implicit none
+
+type(time_window) :: window
+type(project_type), intent(in)           ::project
+type(sidechain_library_type), intent(in) ::sc_lib
+type(domain_library_type) , intent(in)   ::dom_lib
+type(topology_set_type)   , intent(in)   ::topologies
+type(raw_data_block) :: block
+logical,allocatable  ::activ_res(:)
+logical,allocatable  ::activ_dom(:)
+logical,allocatable  ::window_mask(:) 
+integer :: ntstep
+integer, intent(in) :: bidx1,bidx2
+real(8),allocatable :: bc11(:),bc12(:),bc21(:),bc22(:)
+integer,allocatable :: m1(:),m2(:)
+integer :: ds1,ds2, iatom1,iatom2,iatom,ires,s1,s2,i,j,k,t,idom,ncvtype 
+real(8) :: b11(3),b12(3),b21(3),b22(3),b13(3),b23(3),b1(3),b2(3),b1_res(3),b2_res(3)
+real(8) :: v1(3,2),v2(3,2),l11,l12,l21,l22,or1(3,3),or2(3,3),rel(3,3),rel_last(3,3),shift_rel(3,3)
+real(8) :: lr1,lr2
+
+allocate(bc11(dom_lib%domain(bidx1)%natom_keep))
+allocate(bc12(dom_lib%domain(bidx1)%natom_keep))
+allocate(m1(dom_lib%domain(bidx1)%natom_keep))
+bc11=dom_lib%domain(bidx1)%cv(1,:)
+bc12=dom_lib%domain(bidx1)%cv(2,:)
+m1=dom_lib%domain(bidx1)%map
+
+
+allocate(bc21(dom_lib%domain(bidx2)%natom_keep))
+allocate(bc22(dom_lib%domain(bidx2)%natom_keep))
+allocate(m2(dom_lib%domain(bidx2)%natom_keep))
+bc21=dom_lib%domain(bidx2)%cv(1,:)
+bc22=dom_lib%domain(bidx2)%cv(2,:)
+m2=dom_lib%domain(bidx2)%map
+
+window%istate =1
+window%irep   =1
+window%start_time_step =1
+window%end_time_step   =100000
+ntstep=window%end_time_step-window%start_time_step+1
+
+allocate(window_mask(ntstep)) 
+window_mask=.false.
+do i=1,ntstep,1000
+window_mask(i)=.true.
+end do
+
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+
+
+ds1=dom_lib%domain(bidx1)%start_atom-1
+s1=dom_lib%domain(bidx1)%natom_keep
+
+ds2=dom_lib%domain(bidx2)%start_atom-1
+s2=dom_lib%domain(bidx2)%natom_keep
+
+rel_last=0._8
+rel=0._8
+do t=1,count(window_mask)
+v1=0._8
+v2=0._8
+b1=0._8
+b2=0._8
+idom=bidx1
+    do i=1,dom_lib%domain(idom)%natom_keep     
+        iatom1=dom_lib%domain(idom)%map(i)+dom_lib%domain(idom)%start_atom-1
+        b1=b1+block%xyz(:,iatom1,t)*dom_lib%domain(idom)%cv(1,i)
+        b2=b2+block%xyz(:,iatom1,t)*dom_lib%domain(idom)%cv(2,i)        
+    end do
+
+          l11=dot_product(b1,b1)
+          l12=dot_product(b2,b2)
+          l11=sqrt(l11)
+          l12=sqrt(l12)
+          b11=b1/l11
+          b12=b2/l12
+        or1(:,1)=b11
+        or1(:,2)=b12-dot_product(b11,b12)*b11
+        or1(:,3)=cross_product(b11,b12)
+        
+
+b1=0._8
+b2=0._8
+idom=bidx2
+  do i=1,dom_lib%domain(idom)%natom_keep     
+        iatom1=dom_lib%domain(idom)%map(i)+dom_lib%domain(idom)%start_atom-1
+        b1=b1+block%xyz(:,iatom1,t)*dom_lib%domain(idom)%cv(1,i)
+        b2=b2+block%xyz(:,iatom1,t)*dom_lib%domain(idom)%cv(2,i)        
+    end do
+          l21=dot_product(b1,b1)
+          l22=dot_product(b2,b2)
+          l21=sqrt(l21)
+          l22=sqrt(l22)
+          b21=b1/l21
+          b22=b2/l22
+        or2(:,1)=b21
+        or2(:,2)=b22
+        or2(:,3)=cross_product(b21,b22)
+        rel_last=rel
+        rel=matmul(or2,transpose(or1))
+        shift_rel=matmul(rel_last,transpose(rel))
+        !write(0,*) rel(1,:)
+        !write(0,*) rel(2,:)
+        !write(0,*) rel(3,:)
+        !write(0,*)
+        	
+        write(0,*) shift_rel(1,:)
+        write(0,*) shift_rel(2,:)
+        write(0,*) shift_rel(3,:)
+        write(0,*)
+        
+    do ncvtype = 1, size(sc_lib%residue)
+
+    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
+
+    do j = 1, sc_lib%residue(ncvtype)%freq
+
+        ires = sc_lib%residue(ncvtype)%res_ids(j)
+
+        b1_res = 0.d0
+        b2_res = 0.d0
+
+        do i = 1, sc_lib%residue(ncvtype)%natom_head
+
+            iatom = sc_lib%residue(ncvtype)%map(i) + &
+                    topologies%state(window%istate)%topo%acid_start_list(ires) - 1
+
+            b1_res = b1_res + block%xyz(:,iatom,t) * &
+                               sc_lib%residue(ncvtype)%cv(1,i)
+
+            b2_res = b2_res + block%xyz(:,iatom,t) * &
+                               sc_lib%residue(ncvtype)%cv(2,i)
+                               
+      
+ 
+         end do
+            lr1=dot_product(b1_res,b1_res)
+           lr1=sqrt(lr1)
+           b1_res= b1_res/lr1
+           
+           lr2=dot_product(b2_res,b2_res)
+           lr2=sqrt(lr2)
+           b2_res= b2_res/lr2
+         
+         !write(0,*) sc_lib%residue(ncvtype)%cv(1,:),'cv(1,:)'
+         !write(0,*) sc_lib%residue(ncvtype)%cv(2,:),'cv(2,:)'
+         
+         write(0,*) dot_product(b1_res,b2_res)!,b1_res,b2_res
+         b1_res=matmul(transpose(or1),b1_res)
+         b2_res=matmul(transpose(or1),b2_res)
+         write(0,*) dot_product(b1_res,b2_res)
+         write(0,*) 
+    end do
+
+end do
+end do
+
+
+end subroutine
+
+
+
+
+subroutine test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
+implicit none
+
+type(time_window) :: window
+type(project_type), intent(in)           ::project
+type(sidechain_library_type), intent(in) ::sc_lib
+type(domain_library_type) , intent(in)   ::dom_lib
+type(topology_set_type)   , intent(in)   ::topologies
+
+logical,allocatable  ::activ_res(:)
+logical,allocatable  ::activ_dom(:)
+logical,allocatable  ::window_mask(:) 
+integer :: ntstep
+real(8),allocatable :: stats_b(:),stats_s(:)
+
+!call sidechain_cv_inventur(topologies,1,sc_lib)
+
+
+window%istate =1
+window%irep   =1
+window%start_time_step =1
+window%end_time_step   =1000
+ntstep=window%end_time_step-window%start_time_step+1
+
+allocate(activ_dom(dom_lib%ndo))
+allocate(window_mask(ntstep))
+activ_dom=.true.
+window_mask=.false.
+window_mask=.true.
+!window_mask(ntstep-10:ntstep)=.true.
+call simple_vector_cv_statisics(topologies,window,window_mask,activ_res,activ_dom,sc_lib,dom_lib,project,stats_b,stats_s)
+
+end subroutine
+
+
+
+
+subroutine simple_vector_cv_statisics(topologies,window,window_mask,activ_res&
+,activ_dom,sc_lib,dom_lib,project,stats_b,stats_s)
+implicit none
+type(topology_set_type), intent(in) :: topologies
+type(project_type), intent(in)           :: project
+type(domain_library_type) , intent(in)   ::dom_lib
+type(sidechain_library_type), intent(in) ::sc_lib
+type(time_window),intent(in) :: window
+type(raw_data_block) :: block
+type(window_map)     :: map
+
+logical,allocatable, intent(in) :: activ_res(:),activ_dom(:)
+logical,allocatable, intent(in)  :: window_mask(:) 
+integer :: time_step,i,iatom,idom,ntstep
+real(8) :: b1(3),b2(3),s1(3),s2(3),lb1,lb2,b12,basis(3,3),t1(3),t2(3),t3(3),t4(3),t5(3)
+real(8) :: b1_res(3),b2_res(3),s1_res(3),s2_res(3),lb1_res,lb2_res,b12_res,basis_res(3,3)
+real(8) ::q1(3),q2(3)
+real(8),allocatable :: l1diffsq(:),l2diffsq(:),b12diffsq(:),l1s,l2s,b12s
+real(8),allocatable :: l1diffsq_res(:),l2diffsq_res(:),b12diffsq_res(:),l1s_res,l2s_res,b12s_res
+real(8),allocatable :: stats_b(:),stats_s(:)
+integer :: ndomain,nres,ncv,ncvtype,j, ires
+
+
+!call get_window_map(window, project, map)
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+    
+    ndomain=dom_lib%ndo
+    
+allocate( l1diffsq(ndomain))
+allocate( l2diffsq(ndomain))
+allocate(b12diffsq(ndomain))
+
+nres=topologies%state(window%istate)%topo%nres
+allocate( l1diffsq_res(nres))
+allocate( l2diffsq_res(nres))
+allocate(b12diffsq_res(nres))
+
+ntstep=count(window_mask)
+
+ l1diffsq=0._8
+ l2diffsq=0._8
+b12diffsq=0._8
+
+l1diffsq_res = 0.d0
+l2diffsq_res = 0.d0
+b12diffsq_res = 0.d0
+
+do time_step=1,ntstep
+
+
+
+
+    do idom=1,dom_lib%ndo
+    
+    b1=0._8
+    b2=0._8
+    s1=0._8
+    s2=0._8
+    
+        do i=1,dom_lib%domain(idom)%natom_keep
+        
+        iatom=dom_lib%domain(idom)%map(i)+dom_lib%domain(idom)%start_atom-1
+        b1=b1+block%xyz(:,iatom,time_step)*dom_lib%domain(idom)%cv(1,i)
+        b2=b2+block%xyz(:,iatom,time_step)*dom_lib%domain(idom)%cv(2,i)
+        
+        end do
+        !write(0,*) block%xyz(:,iatom,time_step),'#############'
+        !write(0,*)shape(block%xyz)
+    lb1=dot_product(b1,b1)
+    lb2=dot_product(b2,b2)
+    lb1=sqrt(lb1)
+    lb2=sqrt(lb2)
+    b1=b1/lb1
+    b2=b2/lb2
+    b12=dot_product(b1,b2)
+    !write(0,*) lb1,lb2,b12
+    
+    l1s =1._8-lb1
+    l2s =1._8-lb1
+    b12s=b12
+             
+     l1diffsq(idom)= l1diffsq(idom)+l1s *l1s 
+     l2diffsq(idom)= l2diffsq(idom)+l2s *l2s 
+    b12diffsq(idom)=b12diffsq(idom)+b12s*b12s
+    
+    basis(1,:)=b1
+    basis(2,:)=b2
+    basis(3,:)=cross_product(b1,b2)
+    
+    
+    end do
+    
+
+
+do ncvtype = 1, size(sc_lib%residue)
+
+    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
+
+    do j = 1, sc_lib%residue(ncvtype)%freq
+
+        ires = sc_lib%residue(ncvtype)%res_ids(j)
+
+        b1_res = 0.d0
+        b2_res = 0.d0
+
+        do i = 1, sc_lib%residue(ncvtype)%natom_head
+
+            iatom = sc_lib%residue(ncvtype)%map(i) + &
+                    topologies%state(window%istate)%topo%acid_start_list(ires) - 1
+
+            b1_res = b1_res + block%xyz(:,iatom,time_step) * &
+                               sc_lib%residue(ncvtype)%cv(1,i)
+
+            b2_res = b2_res + block%xyz(:,iatom,time_step) * &
+                               sc_lib%residue(ncvtype)%cv(2,i)
+
+         !write(0,*) topologies%state(window%istate)%topo%atom_id(iatom),sc_lib%residue(ncvtype)%map(i)
+        
+         
+       
+         
+         end do
+         
+         
+
+!write(0,*) dot_product(b1_res,b2_res)       
+!write(0,*) b1_res, b2_res,sc_lib%residue(ncvtype)%resname
+        lb1_res = sqrt(dot_product(b1_res,b1_res))
+        lb2_res = sqrt(dot_product(b2_res,b2_res))
+!write(0,*)sc_lib%residue(ncvtype)%cv(1,:)
+!write(0,*)sc_lib%residue(ncvtype)%cv(2,:)
+!pause
+        !if (lb1_res <= tiny(1.d0) .or. lb2_res <= tiny(1.d0)) cycle
+
+        b1_res = b1_res / lb1_res
+        b2_res = b2_res / lb2_res
+
+        b12_res = dot_product(b1_res,b2_res)
+        write(0,*) lb1_res,lb2_res,b12_res,'llc'&
+        ,topologies%state(window%istate)%topo%resnames(ires)&
+        ,ires,sc_lib%residue(ncvtype)%resname
+        
+        l1s_res  = 1.d0 - lb1_res
+        l2s_res  = 1.d0 - lb2_res
+        b12s_res = b12_res
+
+        l1diffsq_res(ires)  = l1diffsq_res(ires)  + l1s_res*l1s_res
+        l2diffsq_res(ires)  = l2diffsq_res(ires)  + l2s_res*l2s_res
+        b12diffsq_res(ires) = b12diffsq_res(ires) + b12s_res*b12s_res
+
+        basis_res(1,:) = b1_res
+        basis_res(2,:) = b2_res
+        basis_res(3,:) = cross_product(b1_res,b2_res)
+
+    end do
+
+end do
+ 
+!pause
+end do
+
+
+
+ l1diffsq= l1diffsq/dble(ntstep)
+ l2diffsq= l2diffsq/dble(ntstep)
+b12diffsq=b12diffsq/dble(ntstep)
+
+
+
+
+
+write(0,*)
+write(0,*) 'local domain basis instability scores'
+write(0,*)
+do idom=1,ndomain
+!write(0,*) dom_lib%domain(idom)%domain_name,l1diffsq(idom),l2diffsq(idom),b12diffsq(idom)
+!write(0,*) dom_lib%domain(idom)%natom_keep/3,-log(l1diffsq(idom)),-log(l2diffsq(idom)),-log(b12diffsq(idom))
+!write(0,*) idom,-log(l1diffsq(idom))-log(l2diffsq(idom))-log(b12diffsq(idom))
+end do
+
+
+ l1diffsq_res= l1diffsq_res/dble(ntstep)
+ l2diffsq_res= l2diffsq_res/dble(ntstep)
+b12diffsq_res=b12diffsq_res/dble(ntstep)
+
+
+i=0
+write(0,*)
+write(0,*) 'local sidechain basis instability scores'
+write(0,*)
+do idom=2,topologies%state(window%istate)%topo%nres-1
+if(topologies%state(window%istate)%topo%resnames(idom)=='GLY'.or. topologies%state(window%istate)%topo%resnames(idom)=='ALA') cycle
+i=i+1
+write(0,*) topologies%state(window%istate)%topo%resnames(idom)
+write(0,*) l1diffsq_res(idom),l2diffsq_res(idom),b12diffsq_res(idom)
+!write(0,*) -log(l1diffsq_res(idom)),-log(l2diffsq_res(idom)),-log(b12diffsq_res(idom))
+!write(0,*) idom,-log(l1diffsq_res(idom))-log(l2diffsq_res(idom))-log(b12diffsq_res(idom))
+!write(0,*)
+end do
+
+!write(0,*) ndomain,'???',dom_lib%ndo
+if(allocated(stats_b)) deallocate(stats_b)
+allocate(stats_b(dom_lib%ndo))
+
+
+if(allocated(stats_s)) deallocate(stats_s)
+allocate(stats_s(i))
+i=0
+do ncvtype = 1, size(sc_lib%residue)
+
+    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
+
+    do j = 1, sc_lib%residue(ncvtype)%freq
+        i=i+1
+        ires = sc_lib%residue(ncvtype)%res_ids(j)
+        
+        stats_s(i)=b12diffsq_res(ires)
+
+  end do
+end do
+        
+        
+        
+stats_b=b12diffsq
+
+!pause
+end subroutine
+
+
+subroutine sidechain_cv_inventur(topologies,istate,sc_lib)
+
+type(sidechain_library_type), intent(in) ::sc_lib
+type(topology_set_type), intent(in) :: topologies
+integer, intent(in) :: istate
+integer:: nres,ires,ncvtype,icv,freq,i,j,k,iatom
+
+
+do ncvtype=1,size(sc_lib%residue)
+   if( allocated(sc_lib%residue(ncvtype)%cv) .eqv. .false.) cycle
+     write(0,*) allocated(sc_lib%residue(ncvtype)%cv),ncvtype
+     write(0,*) sc_lib%residue(ncvtype)%cv(1,:)
+     write(0,*) sc_lib%residue(ncvtype)%cv(2,:)
+    do j=1,sc_lib%residue(ncvtype)%freq
+    ires=sc_lib%residue(ncvtype)%res_ids(j)
+    
+    write(0,*) topologies%state(istate)%topo%resnames(ires),ires,sc_lib%residue(ncvtype)%freq
+    
+        do i=1,sc_lib%residue(ncvtype)%natom_head
+        iatom=sc_lib%residue(ncvtype)%map(i)&
+             +topologies%state(istate)%topo%acid_start_list(ires)-1
+        write(0,*) iatom,topologies%state(istate)%topo%atom_id(iatom)
+       
+        end do
+        
+    end do
+end do
+
+!pause
+end subroutine
+
+
+
+
+function cross_product(x1,x2) result(c)
+
+implicit none
+
+real(8), intent(in) :: x1(3), x2(3)
+real(8) :: c(3)
+
+c(1) = x1(2)*x2(3) - x1(3)*x2(2)
+c(2) = x1(3)*x2(1) - x1(1)*x2(3)
+c(3) = x1(1)*x2(2) - x1(2)*x2(1)
+
+end function cross_product
+
+
+
+!N   HIS X  86 N   HIS X  71
+!H   HIS X  86 H   HIS X  71
+!CA  HIS X  86 CA  HIS X  71
+!HA  HIS X  86 HA  HIS X  71
+!CB  HIS X  86 CB  HIS X  71
+!HB1 HIS X  86 HB1 HIS X  71
+!HB2 HIS X  86 HB2 HIS X  71
+!CG  HIS X  86 CG  HIS X  71
+!ND1 HIS X  86 ND1 HIS X  71
+!CD2 HIS X  86 HD1 HIS X  71
+!HD2 HIS X  86 CD2 HIS X  71
+!CE1 HIS X  86 HD2 HIS X  71
+!HE1 HIS X  86 CE1 HIS X  71
+!NE2 HIS X  86 HE1 HIS X  71
+!HE2 HIS X  86 NE2 HIS X  71
+!C   HIS X  86 C   HIS X  71
+!O   HIS X  86 O   HIS X  71
+end module tra_lift_module

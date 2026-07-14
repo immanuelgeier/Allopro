@@ -1,0 +1,146 @@
+module raw_data_block_reader
+
+use project_module
+use time_window_file_mapping
+
+implicit none
+
+private
+
+public :: raw_data_block
+public :: load_raw_data_block
+
+type :: raw_data_block
+
+    integer :: natom
+    integer :: nframe
+
+    integer :: istate
+    integer :: irep
+
+    integer :: start_time_step
+    integer :: end_time_step
+
+    real, allocatable :: xyz(:,:,:)
+
+end type
+
+contains
+subroutine load_raw_data_block( &
+    project, &
+    window, &
+    block)
+
+    type(project_type), intent(in) :: project
+    type(time_window),  intent(in) :: window
+
+    type(raw_data_block), intent(out) :: block
+
+    type(window_map) :: map
+
+    integer :: natom
+    integer :: nframe_total
+
+    integer :: iseg
+    integer :: iframe_out
+
+    call get_window_map(window, project, map)
+
+    natom = project%natom
+
+    nframe_total = 0
+
+    do iseg = 1, map%nsegment
+        nframe_total = nframe_total + map%segment(iseg)%nframes
+    end do
+
+    allocate(block%xyz(3,natom,nframe_total))
+
+    block%natom = natom
+    block%nframe = nframe_total
+
+    block%istate = window%istate
+    block%irep   = window%irep
+
+    block%start_time_step = window%start_time_step
+    block%end_time_step   = window%end_time_step
+
+    iframe_out = 1
+
+    do iseg = 1, map%nsegment
+
+        call load_segment( &
+            project, &
+            map%segment(iseg), &
+            block%xyz(:,:,iframe_out:) )
+
+        iframe_out = iframe_out + map%segment(iseg)%nframes
+
+    end do
+
+end subroutine
+
+subroutine load_segment( &
+    project, &
+    segment, &
+    xyz)
+
+    type(project_type), intent(in) :: project
+    type(window_segment), intent(in) :: segment
+
+    real, intent(out) :: xyz(:,:,:)
+
+    type(adaptive_dcd_type) :: reader
+
+    character(400) :: filename
+
+    integer :: iframe
+    integer :: nread
+
+    filename = project%state(segment%istate) &
+                      %rep(segment%irep) &
+                      %dcd_files(segment%ifile)
+
+    call adaptive_open(reader, filename)
+
+    do iframe = 1, segment%start_frame_in_file - 1
+
+        call skip_frame(reader)
+
+    end do
+
+    call adaptive_read_frames( &
+        reader, &
+        xyz(:,:,1:segment%nframes), &
+        nread)
+
+    call adaptive_close(reader)
+
+end subroutine
+
+subroutine skip_frame(reader)
+
+    type(adaptive_dcd_type), intent(inout) :: reader
+
+    real :: box
+
+    real, allocatable :: x(:)
+    real, allocatable :: y(:)
+    real, allocatable :: z(:)
+
+    allocate(x(reader%natom))
+    allocate(y(reader%natom))
+    allocate(z(reader%natom))
+
+    read(reader%unit) box
+    read(reader%unit) x
+    read(reader%unit) y
+    read(reader%unit) z
+
+    reader%current_frame = reader%current_frame + 1
+
+    deallocate(x,y,z)
+
+end subroutine
+
+end module time_window_file_reader

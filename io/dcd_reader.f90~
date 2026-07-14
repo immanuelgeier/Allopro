@@ -1,0 +1,73 @@
+module dcd_reader
+
+use iso_fortran_env, only: real32
+implicit none
+
+contains
+
+!=========================================================
+subroutine read_dcd_header(filename, natom, nframes)
+!=========================================================
+    implicit none
+    character(len=*), intent(in) :: filename
+    integer, intent(out) :: natom, nframes
+
+    character(4) :: dummyc
+    integer :: dummyi, io,i
+    real :: dummyr
+
+    open(10, file=trim(filename), status='old', form='unformatted', iostat=io)
+    if (io /= 0) stop "ERROR opening DCD"
+
+    read(10) dummyc, nframes, (dummyi,i=1,8), dummyr, (dummyi,i=1,9)
+    read(10) dummyi, dummyr
+    read(10) natom
+
+    close(10)
+
+end subroutine
+
+
+!=========================================================
+subroutine read_dcd_into_block(filename, pos, natom, nframes)
+!=========================================================
+    implicit none
+
+    character(len=*), intent(in) :: filename
+    integer, intent(out) :: natom, nframes
+    real, allocatable, intent(out) :: pos(:,:,:)
+
+    integer :: io, i
+    character(4) :: dummyc
+    integer :: dummyi
+    real :: dummyr
+    real, allocatable :: x(:), y(:), z(:)
+
+    open(10, file=trim(filename), status='old', form='unformatted', iostat=io)
+    if (io /= 0) stop "ERROR opening DCD"
+
+    read(10) dummyc, nframes, (dummyi,i=1,8), dummyr, (dummyi,i=1,9)
+    read(10) dummyi, dummyr
+    read(10) natom
+
+    allocate(pos(3, natom, nframes))
+
+    allocate(x(natom), y(natom), z(natom))
+
+    do i = 1, nframes
+        read(10) dummyr   ! box ignored
+        read(10) x
+        read(10) y
+        read(10) z
+
+        pos(1,:,i) = x
+        pos(2,:,i) = y
+        pos(3,:,i) = z
+    end do
+
+    close(10)
+    deallocate(x,y,z)
+
+end subroutine
+
+end module dcd_reader

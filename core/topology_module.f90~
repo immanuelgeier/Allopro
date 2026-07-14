@@ -1,0 +1,255 @@
+module topology_module
+
+implicit none
+
+!====================================================
+! SINGLE TOPOLOGY
+!====================================================
+type :: topology_type
+
+
+! atom level
+integer :: natom = 0
+
+character(4), allocatable :: atom_id(:)
+character(3), allocatable :: acid_id(:)
+character(1), allocatable :: strain_id(:)
+
+integer, allocatable :: acid_number(:)
+integer, allocatable :: res_key(:)
+
+! residue level
+integer :: nres = 0
+
+integer, allocatable :: acid_size(:)
+integer, allocatable :: acid_num_list(:)
+integer, allocatable :: acid_start_list(:)
+
+character(3), allocatable :: acid_id_list(:)
+character(3), allocatable :: resnames(:)
+
+! geometry
+real(4), allocatable :: refx(:)
+real(4), allocatable :: refy(:)
+real(4), allocatable :: refz(:)
+
+! mapping
+integer, allocatable :: residx(:)
+
+
+end type topology_type
+
+!====================================================
+! ONE TOPOLOGY PER STATE
+!====================================================
+type :: state_topology_type
+
+
+character(400) :: pdb_file = ''
+
+type(topology_type) :: topo
+
+
+end type state_topology_type
+
+!====================================================
+! COLLECTION OF STATE TOPOLOGIES
+!====================================================
+type :: topology_set_type
+
+
+integer :: nstate = 0
+
+type(state_topology_type), allocatable :: state(:)
+
+
+end type topology_set_type
+
+contains
+
+!====================================================
+! ALLOCATE TOPOLOGY SET
+!====================================================
+subroutine allocate_topology_set(topologies, nstate)
+
+type(topology_set_type), intent(inout) :: topologies
+integer, intent(in) :: nstate
+
+topologies%nstate = nstate
+
+if (allocated(topologies%state)) then
+    deallocate(topologies%state)
+end if
+
+allocate(topologies%state(nstate))
+
+
+end subroutine allocate_topology_set
+
+!====================================================
+! ALLOCATE ATOM LEVEL ARRAYS
+!====================================================
+subroutine allocate_topology(topo)
+
+type(topology_type), intent(inout) :: topo
+
+allocate(topo%atom_id(topo%natom))
+allocate(topo%acid_id(topo%natom))
+allocate(topo%strain_id(topo%natom))
+
+allocate(topo%acid_number(topo%natom))
+allocate(topo%res_key(topo%natom))
+
+allocate(topo%refx(topo%natom))
+allocate(topo%refy(topo%natom))
+allocate(topo%refz(topo%natom))
+
+
+end subroutine allocate_topology
+
+!====================================================
+! BUILD RESIDUE SIZE + KEY MAP
+!====================================================
+subroutine make_acid_size_list(topo)
+
+type(topology_type), intent(inout) :: topo
+
+integer :: i
+integer :: res
+integer :: last_res
+integer :: count
+
+if (allocated(topo%acid_size))       deallocate(topo%acid_size)
+if (allocated(topo%acid_num_list))   deallocate(topo%acid_num_list)
+if (allocated(topo%acid_id_list))    deallocate(topo%acid_id_list)
+if (allocated(topo%acid_start_list)) deallocate(topo%acid_start_list)
+if (allocated(topo%resnames))        deallocate(topo%resnames)
+
+res = 1
+last_res = topo%acid_number(1)
+
+do i = 2, topo%natom
+
+    if (topo%acid_number(i) /= last_res) then
+        res = res + 1
+        last_res = topo%acid_number(i)
+    end if
+
+end do
+
+topo%nres = res
+
+allocate(topo%acid_size(res))
+allocate(topo%acid_start_list(res))
+allocate(topo%resnames(res))
+
+topo%acid_size = 0
+
+res = 1
+count = 1
+
+last_res = topo%acid_number(1)
+
+topo%res_key(1) = 1
+
+do i = 2, topo%natom
+
+    if (topo%acid_number(i) /= last_res) then
+
+        topo%acid_size(res) = count
+
+        res = res + 1
+        count = 0
+
+        last_res = topo%acid_number(i)
+
+    end if
+
+    count = count + 1
+
+    topo%res_key(i) = res
+
+end do
+
+topo%acid_size(res) = count
+
+
+end subroutine make_acid_size_list
+
+!====================================================
+! BUILD RESIDUE START LIST
+!====================================================
+subroutine make_acid_start_list(topo)
+
+type(topology_type), intent(inout) :: topo
+
+integer :: i
+integer :: counter
+
+counter = 1
+
+do i = 1, topo%nres
+
+    topo%acid_start_list(i) = counter
+
+    counter = counter + topo%acid_size(i)
+
+end do
+
+do i = 1, topo%nres
+
+    topo%resnames(i) = &
+        topo%acid_id(topo%acid_start_list(i))
+
+end do
+
+
+end subroutine make_acid_start_list
+
+!====================================================
+! BUILD RESIDUE INDEX MAP
+!====================================================
+subroutine make_residx(topo)
+
+
+type(topology_type), intent(inout) :: topo
+
+integer :: i
+integer :: j
+
+if (allocated(topo%residx)) then
+    deallocate(topo%residx)
+end if
+
+allocate(topo%residx(topo%natom))
+
+topo%residx = 0
+
+do i = 1, topo%nres
+
+    do j = topo%acid_start_list(i), &
+           topo%acid_start_list(i) + topo%acid_size(i) - 1
+
+        topo%residx(j) = i
+
+    end do
+
+end do
+
+
+end subroutine make_residx
+
+!====================================================
+! COMPLETE TOPOLOGY FINALIZATION
+!====================================================
+subroutine finalize_topology(topo)
+
+type(topology_type), intent(inout) :: topo
+
+call make_acid_size_list(topo)
+call make_acid_start_list(topo)
+call make_residx(topo)
+
+end subroutine finalize_topology
+
+end module topology_module

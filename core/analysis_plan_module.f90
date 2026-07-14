@@ -1,0 +1,527 @@
+module analysis_plan_module
+
+use project_module
+implicit none
+
+
+
+
+!=========================================================
+type :: analysis_step_type
+    character(64) :: name = ''
+end type
+
+!=========================================================
+type :: analysis_settings_type
+
+    logical :: dry_run = .false.
+
+    integer :: mode = 1
+    ! 1 = file stream
+    ! 2 = block stream
+    
+    integer :: block_size = 0
+    	
+
+    logical,allocatable :: atom_mask(:)   !nfirst_natom_to_read
+    logical,allocatable :: frame_mask(:)  !block_size
+    integer,allocatable :: atom_list(:)   !count(atom_mask)
+    integer,allocatable :: frame_list(:)  !count(frame_mask)
+
+end type
+
+
+
+!=========================================================
+type :: analysis_plan_type
+    type(analysis_settings_type) :: settings
+    
+    integer :: nstep = 0
+    type(analysis_step_type), allocatable :: step(:)
+end type
+
+
+type :: stream_plan_type
+
+    integer :: natom_to_read = 0
+    integer :: natom_selected = 0
+
+    integer :: block_size = 0
+
+    integer :: nframes_per_rep = 0
+    integer :: nblocks_per_rep = 0
+
+    integer :: nframes_last_block = 0
+    integer :: nframes_unused = 0
+
+    integer :: max_carry_frames
+
+    integer :: nblocks
+
+    integer :: selected_frames_per_block
+
+    integer :: nfirst_natom_raw
+   
+
+end type
+
+contains
+
+subroutine plan_stream(project, plan)
+
+    type(project_type),       intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+
+    integer :: istate
+    integer :: irep
+
+    integer :: nframes
+    integer :: nblocks
+    integer :: remainder
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'STREAM PLAN'
+    write(0,*) '================================'
+
+    write(0,*) 'block size:',plan%settings%block_size
+
+    write(0,*)
+
+    do istate=1,project%nstate
+
+        write(0,*) 'state:',trim(project%state(istate)%name)
+
+        do irep=1,project%state(istate)%nrep
+
+            nframes = project%state(istate)%rep(irep)%nframes_per_rep_use
+
+            nblocks = nframes / plan%settings%block_size
+
+            remainder = mod(nframes, plan%settings%block_size)
+
+            write(0,*)
+            write(0,*) 'rep:',irep
+            write(0,*) 'frames available:',nframes
+            write(0,*) 'full blocks     :',nblocks
+            write(0,*) 'last remainder  :',remainder
+            !write(0,*) nframes-nblocks*plan%settings%block_size
+        end do
+
+    end do
+
+end subroutine
+
+
+subroutine dry_run_stream_old(project, plan)
+
+    implicit none
+
+    type(project_type),       intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+
+    integer :: istate
+    integer :: irep
+
+    integer :: natom_selected
+
+    integer :: nframes_rep
+    integer :: nfull_blocks
+    integer :: nframes_last_block
+    integer :: nframes_discarded
+
+    integer(kind=8) :: bytes_per_buffer
+    real(8)         :: mb_per_buffer
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'STREAM DRY RUN'
+    write(0,*) '================================'
+
+    write(0,*) 'mode      :',plan%settings%mode
+    write(0,*) 'block size:',plan%settings%block_size
+
+    write(0,*)
+
+    if (allocated(plan%settings%atom_mask)) then
+        natom_selected = count(plan%settings%atom_mask)
+    else
+        !natom_selected = plan%settings%nfirst_natom_to_read
+    end if
+
+    !write(0,*) 'selected atoms:',natom_selected
+    !write(0,*)
+    
+
+    do istate = 1, project%nstate
+
+        write(0,*)
+        write(0,*) '--------------------------------'
+        write(0,*) 'state:',trim(project%state(istate)%name)
+        write(0,*) '--------------------------------'
+
+        do irep = 1, project%state(istate)%nrep
+
+            nframes_rep = &
+                project%state(istate)%rep(irep)%nframes_per_rep_use
+
+            nfull_blocks = &
+                nframes_rep / plan%settings%block_size
+
+            nframes_last_block = &
+                mod(nframes_rep, plan%settings%block_size)
+
+            nframes_discarded = 0
+
+            bytes_per_buffer = &
+                int(3,8) * &
+                int(natom_selected,8) * &
+                int(plan%settings%block_size,8) * &
+                4_8
+
+            mb_per_buffer = &
+                real(bytes_per_buffer,8) / 1024.d0 / 1024.d0
+
+            write(0,*)
+            write(0,*) 'rep:',irep
+
+            write(0,*) 'frames per rep :',nframes_rep
+            write(0,*) 'full blocks    :',nfull_blocks
+            write(0,*) 'remainder      :',nframes_last_block
+
+            write(0,*) 'buffer shape:'
+            write(0,*) 'current_pos(', &
+                3,',', &
+                natom_selected,',', &
+                plan%settings%block_size,')'
+
+            write(0,*) 'next_pos   (', &
+                3,',', &
+                natom_selected,',', &
+                plan%settings%block_size,')'
+
+            write(0,*) 'memory per buffer [MB]:',mb_per_buffer
+            write(0,*) 'double buffer    [MB]:',2.d0*mb_per_buffer
+
+        end do
+
+    end do
+
+    write(0,*)
+
+end subroutine
+
+!=========================================================
+subroutine add_step(plan, step_name)
+    type(analysis_plan_type), intent(inout) :: plan
+    character(*), intent(in) :: step_name
+
+    type(analysis_step_type), allocatable :: tmp(:)
+    integer :: n
+
+    n = plan%nstep + 1
+    allocate(tmp(n))
+
+    if (plan%nstep > 0) then
+        tmp(1:plan%nstep) = plan%step
+        deallocate(plan%step)
+    end if
+
+    tmp(n)%name = trim(step_name)
+
+    call move_alloc(tmp, plan%step)
+    plan%nstep = n
+end subroutine
+
+!=========================================================
+subroutine print_plan(plan)
+    type(analysis_plan_type), intent(in) :: plan
+    integer :: i
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'ANALYSIS PLAN'
+    write(0,*) '================================'
+
+    write(0,*) 'dry run   : ', plan%settings%dry_run
+    write(0,*) 'mode      : ', plan%settings%mode
+    write(0,*) 'block size: ', plan%settings%block_size
+
+    write(0,*)
+    write(0,*) 'analysis steps:'
+
+    do i = 1, plan%nstep
+        write(0,*) '  ', trim(plan%step(i)%name)
+    end do
+
+    write(0,*)
+end subroutine
+
+
+
+subroutine dry_run_stream_executor(project,plan)
+
+    use project_module
+    implicit none
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+
+    integer :: istate
+    integer :: irep
+
+    integer :: frames_total
+    integer :: frames_total_off
+    integer :: frames_per_dcd
+    integer :: block_size
+
+    integer :: nblocks
+    integer :: ignored_tail
+
+    integer :: iblock
+
+    integer :: current_dcd
+    integer :: current_dcd_frame
+
+    integer :: carry_frames
+
+    integer :: buffer_fill
+    integer :: available
+    integer :: copied
+
+    integer :: seg_begin
+    integer :: seg_end
+    integer :: seg_effective
+
+    integer :: max_carry_frames
+    integer :: current_rep_frame_use_block_start
+    integer :: current_rep_frame_use_block_end
+    integer :: off_start,off_end
+
+    integer :: skip_remaining
+    integer :: rep_remaining
+    integer :: prod
+    integer :: produced_frames
+
+    character(16) :: active_buffer
+
+    block_size = plan%settings%block_size
+
+    max_carry_frames = 0
+    current_rep_frame_use_block_start=1
+    current_rep_frame_use_block_end = block_size
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'DRY RUN STREAM EXECUTOR'
+    write(0,*) '================================'
+
+    do istate = 1, project%nstate
+
+        do irep = 1, project%state(istate)%nrep
+
+            off_start = project%state(istate)%rep(irep)%offset_start
+            off_end   = project%state(istate)%rep(irep)%offset_end
+
+            frames_total = project%state(istate)%rep(irep)%nframes_per_rep_use
+
+            !=================================================
+            ! APPLY OFFSET LOGIC
+            !=================================================
+            rep_remaining = frames_total - off_start - off_end
+            skip_remaining = off_start
+            produced_frames = 0
+
+            nblocks = rep_remaining / block_size
+            ignored_tail = mod(rep_remaining, block_size)
+
+            write(0,*)
+            write(0,*) 'STATE:',trim(project%state(istate)%name)
+            write(0,*) 'REP  :',irep
+            write(0,*) 'frames total :',frames_total
+            write(0,*) 'offset start :',off_start
+            write(0,*) 'offset end   :',off_end
+            write(0,*) 'frames usable:',rep_remaining
+            write(0,*) 'block size   :',block_size
+            write(0,*) 'full blocks  :',nblocks
+            write(0,*) 'ignored tail :',ignored_tail
+
+            ! pause
+
+            !=================================================
+            ! INIT STREAM STATE
+            !=================================================
+            current_dcd       = 1
+            current_dcd_frame = 1
+            carry_frames      = 0
+
+            active_buffer = 'CURRENT'
+
+            !=================================================
+            ! OFFSET START SKIP (ACROSS DCDs)
+            !=================================================
+            do while (skip_remaining > 0)
+
+                frames_per_dcd = project%state(istate)%rep(irep)% &
+                                 nframes_per_dcd_use(current_dcd)
+
+                available = frames_per_dcd - current_dcd_frame + 1
+                copied = min(available, skip_remaining)
+
+                current_dcd_frame = current_dcd_frame + copied
+                skip_remaining = skip_remaining - copied
+
+                if (current_dcd_frame > frames_per_dcd) then
+                    current_dcd = current_dcd + 1
+                    current_dcd_frame = 1
+                end if
+
+            end do
+
+            !=================================================
+            ! MAIN BLOCK LOOP
+            !=================================================
+            do iblock = 1, nblocks
+
+                current_rep_frame_use_block_start = (iblock-1)*block_size + 1+off_start
+                current_rep_frame_use_block_end   = iblock*block_size+off_start
+
+                write(0,*)
+                write(0,*) '--------------------------------'
+                write(0,*) 'BLOCK',iblock
+                write(0,*) 'rep frame start',current_rep_frame_use_block_start
+                write(0,*) 'rep frame end  ',current_rep_frame_use_block_end
+                write(0,*) 'BUFFER:',trim(active_buffer)
+
+                buffer_fill = 0
+
+                                !=================================================
+                                ! CARRY SEGMENT 
+                                !=================================================
+                if (carry_frames > 0) then
+                
+                    copied = min(carry_frames, block_size - buffer_fill)
+                
+                    seg_begin = buffer_fill + 1
+                    seg_end   = buffer_fill + copied
+                
+                    if (allocated(plan%settings%frame_mask)) then
+                        seg_effective = count(plan%settings%frame_mask(seg_begin:seg_end))
+                    else
+                        seg_effective = copied
+                    end if
+                
+                    write(0,*)
+                    write(0,*) 'COPY CARRY ->',trim(active_buffer)
+                    write(0,*) 'carry frames BEFORE:',carry_frames
+                    write(0,*) 'copied:',copied
+                
+                    buffer_fill = buffer_fill + copied
+                    carry_frames = carry_frames - copied
+                
+                    write(0,*) 'carry frames AFTER:',carry_frames
+                
+                end if
+                
+                !=================================================
+                ! READ DCD SEGMENTS
+                !=================================================
+                	
+                if(current_dcd>project%state(istate)%rep(irep)%ndcd) then
+                	!pause
+                	write(0,*) 'replicat ende'	
+                end if	
+                do while (buffer_fill < block_size .and. &
+                          produced_frames < rep_remaining)
+
+                    frames_per_dcd = project%state(istate)%rep(irep)% &
+                                     nframes_per_dcd_use(current_dcd)
+
+                    available = frames_per_dcd - current_dcd_frame + 1
+
+                    copied = min(available, &
+                                 block_size - buffer_fill, &
+                                 rep_remaining - produced_frames)
+
+                    seg_begin = buffer_fill + 1
+                    seg_end   = buffer_fill + copied
+
+                    if (allocated(plan%settings%frame_mask)) then
+                        seg_effective = count(plan%settings%frame_mask(seg_begin:seg_end))
+                    else
+                        seg_effective = copied
+                    end if
+
+                    write(0,*)
+                    write(0,*) 'READ DCD',current_dcd
+                    write(0,*) 'frames',current_dcd_frame,'->',current_dcd_frame+copied-1
+                    write(0,*) 'COPY ->',trim(active_buffer)
+                    write(0,*) trim(active_buffer)//'[',seg_begin,':',seg_end,']'
+                    write(0,*) 'effective frames:',seg_effective
+
+                    buffer_fill = buffer_fill + copied
+                    produced_frames = produced_frames + copied
+
+                    current_dcd_frame = current_dcd_frame + copied
+
+                    !-----------------------------------------
+                    ! DCD boundary handling (UNCHANGED LOGIC)
+                    !-----------------------------------------
+                    if (current_dcd_frame <= frames_per_dcd) then
+
+                        carry_frames = frames_per_dcd - current_dcd_frame + 1
+
+                        write(0,*)
+                        write(0,*) 'STORE CARRY'
+                        write(0,*) 'frames:',carry_frames
+
+                        max_carry_frames = max(max_carry_frames, carry_frames)
+
+                        current_dcd = current_dcd + 1
+                        current_dcd_frame = 1
+
+                    else
+
+                        current_dcd = current_dcd + 1
+                        current_dcd_frame = 1
+
+                    end if
+
+                end do
+
+                write(0,*)
+                write(0,*) trim(active_buffer),' READY'
+
+                if (allocated(plan%settings%frame_mask)) then
+                    write(0,*) 'EFFECTIVE FRAMES (AFTER MASK):',count(plan%settings%frame_mask)
+                else
+                    write(0,*) 'EFFECTIVE FRAMES (AFTER MASK):',block_size
+                end if
+
+                write(0,*)
+                write(0,*) 'RUN ANALYSIS'
+
+                if (active_buffer == 'CURRENT') then
+                    active_buffer = 'NEXT'
+                else
+                    active_buffer = 'CURRENT'
+                end if
+
+                write(0,*)
+                write(0,*) 'SWAP BUFFERS'
+                
+                !pause
+
+            end do
+
+            write(0,*)
+            write(0,*) 'MAXIMUM CARRY FRAMES:',max_carry_frames
+            write(0,*) 'Extracted FRAMES     :',produced_frames
+     
+        end do
+
+    end do
+
+end subroutine
+
+end module analysis_plan_module

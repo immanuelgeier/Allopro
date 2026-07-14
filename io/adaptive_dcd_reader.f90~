@@ -1,0 +1,189 @@
+module adaptive_dcd_reader
+
+use iso_fortran_env, only : real32
+implicit none
+
+private
+public :: dcd_info_type
+public :: adaptive_dcd_type
+public :: adaptive_open
+public :: adaptive_close
+public :: read_dcd_masked_block
+public :: adaptive_read_dcd_header
+
+!=========================================================
+type :: dcd_info_type
+    integer :: natom   = 0
+    integer :: nframes = 0
+end type
+
+!=========================================================
+type :: adaptive_dcd_type
+    integer :: unit = -1
+    integer :: natom = 0
+    integer :: nframes = 0
+    integer :: current_frame = 0
+    logical :: is_open = .false.
+end type
+
+contains
+
+!=========================================================
+subroutine adaptive_read_frames(reader, pos, nread)
+
+    type(adaptive_dcd_type), intent(inout) :: reader
+    real, intent(out) :: pos(:,:,:)
+    integer, intent(out) :: nread
+
+    integer :: i,k,i_test
+    real :: box
+    real, allocatable :: x(:), y(:), z(:)
+
+    !allocate(x(reader%natom))
+    !allocate(y(reader%natom))
+    !allocate(z(reader%natom))
+    
+    i_test=reader%natom
+    allocate(x(i_test))
+    allocate(y(i_test))
+    allocate(z(i_test))
+
+    nread = 0
+
+    do k = 1, size(pos,3)
+
+        if (reader%current_frame > reader%nframes) exit
+
+        read(reader%unit) box
+        read(reader%unit) x
+        read(reader%unit) y
+        read(reader%unit) z
+
+        !pos(1,:,i) = x
+        !pos(2,:,i) = y
+        !pos(3,:,i) = z
+        !write(0,*) shape(pos),shape(x)
+        pos(1,:,k) = x
+        pos(2,:,k) = y
+        pos(3,:,k) = z
+        !write(0,*) x(1:4)
+        !pause
+        reader%current_frame = reader%current_frame + 1
+        nread = nread + 1
+        !write(0,*) reader%current_frame
+    end do
+
+    deallocate(x,y,z)
+
+end subroutine
+
+
+!=========================================================
+subroutine adaptive_read_dcd_header(filename, info)
+
+    character(*), intent(in) :: filename
+    type(dcd_info_type), intent(out) :: info
+
+    character(4) :: dummyc
+    integer :: dummyi, i, io
+    real :: dummyr
+
+    open(10,file=trim(filename),status='old',form='unformatted',iostat=io)
+    if (io /= 0) stop "ERROR opening DCD"
+
+    read(10) dummyc, info%nframes, (dummyi,i=1,8), dummyr, (dummyi,i=1,9)
+    read(10) dummyi, dummyr
+    read(10) info%natom
+
+    close(10)
+
+end subroutine
+
+!=========================================================
+subroutine adaptive_open(reader, filename)
+
+    type(adaptive_dcd_type), intent(inout) :: reader
+    character(*), intent(in) :: filename
+
+    character(4) :: dummyc
+    integer :: dummyi, i
+    real :: dummyr
+
+    open(newunit=reader%unit, file=trim(filename), &
+         form='unformatted', status='old')
+
+    read(reader%unit) dummyc, reader%nframes, (dummyi,i=1,8), dummyr, (dummyi,i=1,9)
+    read(reader%unit) dummyi, dummyr
+    read(reader%unit) reader%natom
+
+    reader%current_frame = 0
+    reader%is_open = .true.
+
+end subroutine
+
+!=========================================================
+subroutine adaptive_close(reader)
+
+    type(adaptive_dcd_type), intent(inout) :: reader
+
+    if (reader%is_open) close(reader%unit)
+
+    reader%is_open = .false.
+    reader%unit = -1
+
+end subroutine
+
+!=========================================================
+! CORE ROUTINE: MASKED STREAM READER
+!=========================================================
+subroutine read_dcd_masked_block(reader, xyz, frame_mask, nread)
+
+    type(adaptive_dcd_type), intent(inout) :: reader
+    real, intent(out) :: xyz(:,:,:)
+    logical, intent(in) :: frame_mask(:)
+    integer, intent(out) :: nread
+
+    integer :: natom
+    integer :: i, k
+    real :: box
+    real, allocatable :: x(:), y(:), z(:)
+
+    natom = reader%natom
+
+    allocate(x(natom), y(natom), z(natom))
+
+    nread = 0
+
+    do i = 1, size(frame_mask)
+
+        write(0,*) frame_mask(i),reader%current_frame , reader%nframes
+        pause
+        if (reader%current_frame >= reader%nframes) exit
+
+        read(reader%unit) box
+        read(reader%unit) x
+        read(reader%unit) y
+        read(reader%unit) z
+
+        reader%current_frame = reader%current_frame + 1
+        
+        
+        
+        if (frame_mask(i)) then
+            nread = nread + 1
+            k = nread
+
+            xyz(1,:,k) = x
+            xyz(2,:,k) = y
+            xyz(3,:,k) = z
+        end if
+
+    end do
+
+    deallocate(x,y,z)
+
+end subroutine
+
+end module adaptive_dcd_reader
+
+

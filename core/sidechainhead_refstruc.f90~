@@ -1,0 +1,941 @@
+module sidechainhead_refstruc
+
+use project_module
+use topology_module
+use sidechains
+use time_window_file_mapping
+use time_window_loader
+
+
+
+
+contains
+
+subroutine test_get_ref_from_frames(lib,topologies,project)
+implicit none
+integer ::i
+type(time_window) :: window
+integer :: istat,irep,ntstep,stride
+logical,allocatable  :: window_mask(:) 
+logical,allocatable  ::activ_res(:)
+type(sidechain_library_type), intent(in) ::lib
+type(project_type), intent(in) :: project
+type(topology_set_type) :: topologies
+real(8),allocatable :: coords(:,:,:)
+integer,allocatable :: g_start(:),g_size(:)
+real(8),allocatable :: mean_u(:,:)
+real(8),allocatable :: moment_u(:,:,:,:)
+
+window%istate =1
+window%irep   =1
+window%start_time_step =1
+window%end_time_step   =1000
+
+ntstep=window%end_time_step-window%start_time_step+1
+
+allocate(window_mask(ntstep))
+window_mask=.false.
+
+stride=10
+
+do i=1,ntstep,stride
+window_mask(i)=.true.
+end do
+
+allocate(activ_res(topologies%state(window%istate)%topo%nres))
+
+activ_res=.false.
+
+activ_res(1:6)=.true.
+activ_res(4)  =.false.
+
+!write(0,*)topologies%state(window%istate)%topo%resnames(:)
+	
+do i=1,size(activ_res)
+if(activ_res(i)) then
+	write(0,*)topologies%state(window%istate)%topo%resnames(i),size(activ_res)
+end if
+end do
+!pause
+call get_ref_from_frames(1,activ_res,project,topologies,window,window_mask,lib,coords,g_start,g_size)
+call build_statistics(g_start,g_size,coords,mean_u,moment_u)
+call optimize_vectors_moments_cca_rigorous( &
+           g_start,g_size, &
+           mean_u,moment_u)
+
+
+end subroutine
+
+
+
+subroutine get_ref_from_frames(method,activ_res,project,topologies,window,window_mask,lib,coords,g_start,g_size)
+implicit none
+integer :: istate,irep,time_step,i,j,k,nt,ntstep,time
+type(time_window), intent(in) :: window
+type(window_map)  :: map
+type(raw_data_block) :: block
+type(project_type), intent(in) :: project
+type(sidechain_library_type), intent(in) ::lib
+
+logical,allocatable,intent(in)  :: window_mask(:) 
+integer, allocatable :: ref_time_steps(:)
+logical, allocatable :: atom_groups(:)
+logical, allocatable :: activ_res(:)
+integer :: method
+integer :: icv,iatom,nhead,na,ng,ires
+real(8),allocatable :: coords(:,:,:),struc(:,:) 
+integer :: ncv_all,ncoords,ngroup
+integer,allocatable :: g_start(:),g_size(:)
+type(topology_set_type) :: topologies
+
+ntstep=window%end_time_step-window%start_time_step+1
+
+
+call get_window_map(window, project, map)
+!call print_window_map(window, map)
+
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+
+    nt=count(window_mask)
+    write(0,*) block%istate
+    
+    ncv_all=0
+    do i=1,lib%ncv
+        ncv_all=ncv_all+lib%residue(i)%freq
+    end do
+    
+   ncoords=0
+   ngroup=0
+   ires=0
+   do icv=1,lib%ncv
+        write(0,*) 'Residue',lib%residue(icv)%resname
+        do i=1,lib%residue(icv)%freq
+          write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ncoords=ncoords+nhead
+          ngroup=ngroup+1
+        end do
+    end do
+    
+    ng=0
+    
+          do icv=1,lib%ncv
+       
+        do i=1,lib%residue(icv)%freq
+        !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ng=ng+1
+          write(0,*) 'Residue',lib%residue(icv)%resname
+          write(0,*) ng
+          write(0,*)  lib%residue(icv)%res_ids
+          
+          end do
+          end do
+    pause
+    
+    allocate(coords(3,ncoords,nt))
+    
+    write(0,*) ncoords, ngroup
+    !pause
+    allocate(g_start(ngroup))
+    allocate( g_size(ngroup))
+    
+    if(method==1) then
+
+     do time=1,nt
+    ng=0	
+    na=1
+      do icv=1,lib%ncv
+        write(0,*) 'Residue',lib%residue(icv)%resname
+        do i=1,lib%residue(icv)%freq
+         !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          write(0,*) lib%residue(icv)%res_ids(i),count(activ_res)
+          write(0,*)  lib%residue(icv)%res_ids
+          ires=lib%residue(icv)%res_ids(i)
+          ng=ng+1
+         
+          write(0,*)'Gruppe',ng
+          !pause
+          !pause
+          g_start(ng)=na
+          g_size(ng) =nhead          
+          
+          
+             write(0,*) 'time index',time
+                !if(allocated(coords) .and. (size(coords,1)==nhead)) then
+                !	
+                !else 	
+                !if(allocated(coords)) deallocate(coords)
+                ! allocate(coords(3,nhead,ntstep))
+                !end if	
+                do j=1,lib%residue(icv)%natom_head
+                    iatom=lib%residue(icv)%map(j)+topologies%state(window%istate)%topo%acid_start_list(ires)-1
+                    write(0,*) 'natom', iatom,'j',j,'start_list',topologies%state(window%istate)%topo%acid_start_list(ires)&
+                    ,'##########',na,topologies%state(window%istate)%topo%acid_start_list(ires)
+                !write(0,*) topologies%state(window%istate)%topo%acid_start_list
+                coords(:,na,time)=block%xyz(:,iatom,time)
+                na=na+1
+               ! write(0,*)  coords(:,j,time)
+                
+           end do
+          ! pause
+           !call find_conf(coords)
+           
+        end do
+        
+      end do
+    end do	
+    	
+    	
+    end if
+
+end subroutine
+
+
+
+
+subroutine optimize_vektors(g_start,g_size,coords)
+implicit none
+integer :: nt,ng,nc,ig,i,j,jg,ci,cj,a,b,t,tau,k,iter
+integer,allocatable :: g_start(:),g_size(:)
+real(8),allocatable :: coords(:,:,:),means(:,:),weights(:)
+real(8)             :: gyra(3,3),ri(3),rj(3),v(3)
+real(8),allocatable :: cog(:,:)
+real(8),allocatable :: group_tensors(:,:,:,:)
+real(8),allocatable :: gyration(:,:,:)
+real(8) :: eigvals(3),eigvecs(3,3)
+real(8), allocatable :: eigvecs2(:,:)
+real(8), allocatable :: eigvals2(:)
+real(8), allocatable :: vcorr(:,:,:,:)
+real(8), allocatable :: C(:,:)
+real(8), allocatable :: G(:,:)
+real(8), allocatable :: y_new(:)
+real(8) :: alpha, norm,sum_norm
+
+
+nt=size(coords,3)
+nc=size(coords,2)
+ng=size(g_start)
+
+allocate(cog(3,ng))
+allocate(means(3,nc))
+
+means=0.d0
+cog=0.d0
+
+tau=0
+
+j=0
+
+do ig=1,ng
+
+   write(0,*) ig,g_start(ig),g_start(ig)+g_size(ig)-1
+   write(0,*) coords(:,g_start(ig),1),'coord'
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      means(1,i)=means(1,i)+sum(coords(1,i,:))
+      means(2,i)=means(2,i)+sum(coords(2,i,:))
+      means(3,i)=means(3,i)+sum(coords(3,i,:))
+
+   end do
+
+end do
+
+! ----------------------------------------
+! Mittelwerte der Atome
+! ----------------------------------------
+
+means = means / dble(nt)
+
+! ----------------------------------------
+! Gruppen-Schwerpunkte
+! ----------------------------------------
+
+do ig=1,ng
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      cog(1,ig)=cog(1,ig)+means(1,i)
+      cog(2,ig)=cog(2,ig)+means(2,i)
+      cog(3,ig)=cog(3,ig)+means(3,i)
+
+   end do
+
+   cog(:,ig)=cog(:,ig)/dble(g_size(ig))
+
+end do
+
+do i=1,ng
+   write(0,*) cog(:,i),'cog',dble(g_size(i))
+end do
+
+allocate(group_tensors(3,3,nc,nc))
+group_tensors=0.d0
+
+do t=1,nt-tau
+
+   do ig=1,ng
+
+      do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+         ri=coords(:,i,t)-cog(:,ig)
+
+         cj=0
+
+         do jg=1,ng
+
+            do j=g_start(jg),g_start(jg)+g_size(jg)-1
+
+               rj=coords(:,j,t+tau)-cog(:,jg)
+
+               do a=1,3
+                  do b=1,3
+
+                     group_tensors(a,b,i,j)= &
+                     group_tensors(a,b,i,j)+ri(a)*rj(b)
+
+                  end do
+               end do
+
+            end do
+
+         end do
+
+      end do
+
+   end do
+
+end do
+
+group_tensors=group_tensors/dble(nt-tau)
+
+allocate(gyration(3,3,ng))
+allocate(weights(nc))
+gyration = 0.d0
+
+do ig = 1, ng
+
+do i = g_start(ig), g_start(ig)+g_size(ig)-1
+   gyration(:,:,ig) = gyration(:,:,ig) + &
+                      group_tensors(:,:,i,i)
+end do
+
+gyration(:,:,ig) = gyration(:,:,ig) / dble(g_size(ig))
+
+end do
+
+do ig=1,ng
+  gyra=gyration(:,:,ig)
+   call eigen_sym(gyra, eigvecs, eigvals)
+   !do a=1,3
+   !   write(0,*) gyra(a,:)
+   !end do
+   !
+   !write(0,*) 'eigvals',eigvals
+   !do a=1,3
+   !   write(0,*) 'eigvecs',eigvecs(a,:)
+   !end do
+  
+   do j=g_start(ig), g_start(ig)+g_size(ig)-1
+       weights(j)=dot_product( means(:,j)-cog(:,ig),eigvecs(:,3))
+       norm = sqrt(sum(weights(g_start(ig):g_start(ig)+g_size(ig)-1)**2))
+   if (norm > 0.d0) then
+      weights(g_start(ig):g_start(ig)+g_size(ig)-1) = &
+      weights(g_start(ig):g_start(ig)+g_size(ig)-1) / norm
+   end if
+   end do
+   
+end do
+
+write(0,*)  weights
+
+do ig=1,ng
+v=0.
+  do j=g_start(ig), g_start(ig)+g_size(ig)-1
+       
+   ! v=v+weigs   
+  end do
+end do
+
+allocate(vcorr(3,3,ng,ng))
+vcorr = 0.d0
+do ig = 1, ng
+do jg = 1, ng
+
+   do i = g_start(ig), g_start(ig)+g_size(ig)-1
+   do j = g_start(jg), g_start(jg)+g_size(jg)-1
+
+      vcorr(:,:,ig,jg) = vcorr(:,:,ig,jg) + &
+           weights(i) * weights(j) * group_tensors(:,:,i,j)
+
+   end do
+   end do
+    vcorr(:,:,ig,jg) = vcorr(:,:,ig,jg)/ dble(g_size(ig)*g_size(jg))
+end do
+end do
+
+write(0,*)
+sum_norm=0.
+do ig = 1, ng
+do jg = 1, ng 
+sum_norm=sum_norm+sum(vcorr(:,:,ig,jg)**2)
+write(0,*)ig,jg,sum(vcorr(:,:,ig,jg)**2)
+!do a=1,3
+!write(0,*) vcorr(a,:,ig,jg)
+!end do
+!write(0,*) 
+end do
+end do
+
+write(0,*) 'sum_norm',sum_norm
+
+
+allocate(C(9,nc))
+allocate(G(nc,nc))
+allocate(y_new(nc))
+allocate(eigvecs2(nc,nc))
+allocate(eigvals2(nc))
+
+alpha=0.1
+
+! =========================================================
+
+do iter=1,5
+
+do ig = 1, ng
+
+   C = 0.d0
+   G = 0.d0
+
+   ! =====================================================
+   ! Build projected coupling tensor C_j
+   ! C(j) is a 9-vector (flattened 3x3 tensor)
+   ! =====================================================
+
+   do jg = 1, ng
+   do j = g_start(jg), g_start(jg)+g_size(jg)-1
+
+      do i = g_start(ig), g_start(ig)+g_size(ig)-1
+
+         C(:,j) = C(:,j) + &
+            weights(i) * reshape(group_tensors(:,:,i,j), (/9/))
+
+      end do
+
+   end do
+   end do
+
+   ! =====================================================
+   ! Gram matrix G = C^T C
+   ! =====================================================
+
+   G = matmul(transpose(C), C)
+
+   ! optional debug
+   !write(0,*) 'G matrix'
+   !write(0,*) G
+
+   ! =====================================================
+   ! Eigen decomposition
+   ! =====================================================
+
+   call eigen_sym(G, eigvecs2, eigvals2)
+
+   ! take dominant mode (largest eigenvalue)
+   y_new = eigvecs2(:, maxloc(eigvals2, 1))
+
+   norm = sqrt(sum(y_new*y_new))
+   if (norm > 0.d0) y_new = y_new / norm
+
+   ! =====================================================
+   ! MIXING UPDATE (only group ig)
+   ! =====================================================
+
+   do j = g_start(ig), g_start(ig)+g_size(ig)-1
+
+      weights(j) = (1.d0 - alpha)*weights(j) + alpha*y_new(j)
+
+   end do
+
+   ! =====================================================
+   ! Renormalize group
+   ! =====================================================
+
+   norm = sqrt(sum(weights(g_start(ig):g_start(ig)+g_size(ig)-1)**2))
+   if (norm > 0.d0) then
+      weights(g_start(ig):g_start(ig)+g_size(ig)-1) = &
+      weights(g_start(ig):g_start(ig)+g_size(ig)-1) / norm
+   end if
+
+end do
+write(0,*)
+write(0,*) weights
+end do
+
+
+do ig = 1, ng
+do jg = 1, ng
+
+   do i = g_start(ig), g_start(ig)+g_size(ig)-1
+   do j = g_start(jg), g_start(jg)+g_size(jg)-1
+
+      vcorr(:,:,ig,jg) = vcorr(:,:,ig,jg) + &
+           weights(i) * weights(j) * group_tensors(:,:,i,j)
+
+   end do
+   end do
+    vcorr(:,:,ig,jg) = vcorr(:,:,ig,jg)/ dble(g_size(ig)*g_size(jg))
+end do
+end do
+
+write(0,*)
+
+write(0,*)
+sum_norm=0.
+do ig = 1, ng
+do jg = 1, ng 
+sum_norm=sum_norm+sum(vcorr(:,:,ig,jg)**2)
+write(0,*)ig,jg,sum(vcorr(:,:,ig,jg)**2)
+!do a=1,3
+!write(0,*) vcorr(a,:,ig,jg)
+!end do
+!write(0,*) 
+end do
+end do
+write(0,*) 'sum_norm',sum_norm
+
+end subroutine
+
+
+
+
+subroutine build_statistics(g_start,g_size,coords,mean_u,moment_u)
+
+implicit none
+
+integer :: nt,nc,ng
+integer :: ig,i,j,jg,t,a,b
+
+integer,allocatable :: g_start(:),g_size(:)
+
+real(8),allocatable :: coords(:,:,:)
+
+real(8),allocatable :: mean_u(:,:)
+real(8),allocatable :: moment_u(:,:,:,:)
+
+real(8),allocatable :: means(:,:)
+real(8),allocatable :: cog(:,:)
+
+real(8) :: ui(3),uj(3)
+
+nt=size(coords,3)
+nc=size(coords,2)
+ng=size(g_start)
+
+allocate(means(3,nc))
+allocate(cog(3,ng))
+
+allocate(mean_u(3,nc))
+allocate(moment_u(3,3,nc,nc))
+
+means    = 0.d0
+cog      = 0.d0
+mean_u   = 0.d0
+moment_u = 0.d0
+
+! ==========================================
+! atom means
+! ==========================================
+
+do i=1,nc
+
+   means(:,i)=sum(coords(:,i,:),dim=2)
+
+end do
+
+means = means/dble(nt)
+
+! ==========================================
+! group centers
+! ==========================================
+
+do ig=1,ng
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      cog(:,ig)=cog(:,ig)+means(:,i)
+
+   end do
+
+   cog(:,ig)=cog(:,ig)/dble(g_size(ig))
+
+end do
+
+! ==========================================
+! mean_u
+! ==========================================
+
+do ig=1,ng
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      do t=1,nt
+
+         mean_u(:,i)=mean_u(:,i)+ &
+         (coords(:,i,t)-cog(:,ig))
+
+      end do
+
+   end do
+
+end do
+
+mean_u = mean_u/dble(nt)
+
+! ==========================================
+! second moments
+! ==========================================
+
+do t=1,nt
+
+   do ig=1,ng
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      ui = coords(:,i,t)-cog(:,ig)
+
+      do jg=1,ng
+      do j=g_start(jg),g_start(jg)+g_size(jg)-1
+
+         uj = coords(:,j,t)-cog(:,jg)
+
+         do a=1,3
+         do b=1,3
+
+            moment_u(a,b,i,j)= &
+            moment_u(a,b,i,j)+ui(a)*uj(b)
+
+         end do
+         end do
+
+      end do
+      end do
+
+   end do
+   end do
+
+end do
+
+moment_u = moment_u/dble(nt)
+
+end subroutine
+
+
+
+subroutine optimize_vectors_moments_cca_rigorous( &
+           g_start,g_size, &
+           mean_u,moment_u)
+
+implicit none
+
+integer :: ng,nc
+integer :: ig,jg,i,j,k,a,b
+
+integer,allocatable :: g_start(:),g_size(:)
+
+real(8),allocatable :: mean_u(:,:)
+real(8),allocatable :: moment_u(:,:,:,:)
+
+real(8),allocatable :: cov_u(:,:,:,:)
+
+real(8),allocatable :: Ama(:,:)
+real(8),allocatable :: Bma(:,:)
+real(8),allocatable :: eigvecs(:,:)
+real(8),allocatable :: eigvals(:)
+
+real(8),allocatable :: w(:)
+
+real(8) :: norm
+real(8) :: num, den, ratio
+real(8) :: proj(3), tmp(3)
+
+nc = size(mean_u,2)
+ng = size(g_start)
+
+! ----------------------------------------------------
+! covariance
+! ----------------------------------------------------
+
+allocate(cov_u(3,3,nc,nc))
+
+do i=1,nc
+do j=1,nc
+
+   cov_u(:,:,i,j) = moment_u(:,:,i,j)
+
+   do a=1,3
+   do b=1,3
+      cov_u(a,b,i,j) = cov_u(a,b,i,j) - mean_u(a,i)*mean_u(b,j)
+   end do
+   end do
+
+end do
+end do
+
+! ----------------------------------------------------
+! GENERALIZED CCA MATRICES
+! A w = λ B w
+! ----------------------------------------------------
+
+allocate(Ama(nc,nc))
+allocate(Bma(nc,nc))
+
+Ama = 0.d0
+Bma = 0.d0
+
+! ---- build A (cross-group coupling) ----
+
+do ig=1,ng
+do jg=1,ng
+if(ig == jg) cycle
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+   do j=g_start(jg),g_start(jg)+g_size(jg)-1
+
+      do k=1,nc
+      do a=1,3
+      do b=1,3
+
+         Ama(i,j) = Ama(i,j) + &
+            cov_u(a,b,i,k) * cov_u(a,b,j,k)
+
+      end do
+      end do
+      end do
+
+   end do
+   end do
+
+end do
+end do
+
+! ---- build B (within-group normalization) ----
+
+do ig=1,ng
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+   do j=g_start(ig),g_start(ig)+g_size(ig)-1
+
+      do k=1,nc
+      do a=1,3
+      do b=1,3
+
+         Bma(i,j) = Bma(i,j) + &
+            cov_u(a,b,i,k) * cov_u(a,b,j,k)
+
+      end do
+      end do
+      end do
+
+   end do
+   end do
+
+end do
+
+! ----------------------------------------------------
+! SOLVE GENERALIZED EIGENVALUE PROBLEM
+! A w = λ B w
+! ----------------------------------------------------
+
+allocate(eigvecs(nc,nc))
+allocate(eigvals(nc))
+allocate(w(nc))
+
+call eigen_gen_sym(Ama, Bma, eigvecs, eigvals)
+
+w = eigvecs(:, maxloc(eigvals,1))
+
+norm = sqrt(sum(w*w))
+if(norm > 0.d0) w = w/norm
+
+! ====================================================
+! DEBUG OUTPUT (CCA INTERPRETATION)
+! ====================================================
+
+write(0,*)
+write(0,*) "===================================="
+write(0,*) "RIGOROUS CCA RESULT"
+write(0,*) "===================================="
+
+write(0,*) "norm(w) =", norm
+
+! ----------------------------------------------------
+! CCA objective: w^T A w / w^T B w
+! ----------------------------------------------------
+
+num = 0.d0
+den = 0.d0
+
+do i=1,nc
+do j=1,nc
+   num = num + w(i)*Ama(i,j)*w(j)
+   den = den + w(i)*Bma(i,j)*w(j)
+end do
+end do
+
+ratio = num / den
+
+write(0,*) "w^T A w =", num
+write(0,*) "w^T B w =", den
+write(0,*) "CCA ratio =", ratio
+
+! ----------------------------------------------------
+! group structure of weights
+! ----------------------------------------------------
+
+do ig=1,ng
+
+   norm = 0.d0
+
+   do i=g_start(ig),g_start(ig)+g_size(ig)-1
+      norm = norm + w(i)**2
+   end do
+
+   write(0,*) "group", ig, "weight norm =", sqrt(norm)
+
+end do
+
+! ----------------------------------------------------
+! projection into physical space
+! ----------------------------------------------------
+
+proj = 0.d0
+
+do i=1,nc
+   proj(:) = proj(:) + w(i)*mean_u(:,i)
+end do
+
+write(0,*) "projected mean vector =", proj
+write(0,*) "projection magnitude =", sqrt(sum(proj*proj))
+
+! ----------------------------------------------------
+! final output
+! ----------------------------------------------------
+
+write(0,*)
+write(0,*) "FINAL RIGOROUS CCA WEIGHTS"
+write(0,*) w
+
+end subroutine
+
+
+
+subroutine eigen_gen_sym(A, B, v, W)
+  implicit none
+
+  real(8), intent(inout) :: A(:,:), B(:,:)
+  real(8), intent(out)   :: v(:,:), W(:)
+
+  integer :: n, lda, ldb, info, lwork
+  real(8), allocatable :: work(:)
+  real(8) :: work_query(1)
+  real(8), allocatable :: A_copy(:,:), B_copy(:,:)
+
+  n = size(A,1)
+  lda = n
+  ldb = n
+
+  allocate(A_copy(n,n), B_copy(n,n))
+  A_copy = A
+  B_copy = B
+
+  ! Workspace query
+  lwork = -1
+  call dsygv(1,'V','U', n, A, lda, B, ldb, W, work_query, lwork, info)
+
+  lwork = int(work_query(1))
+  allocate(work(lwork))
+
+  ! Solve generalized eigenproblem
+  call dsygv(1,'V','U', n, A, lda, B, ldb, W, work, lwork, info)
+
+  if (info /= 0) then
+     print *, "DSYGV failed, INFO =", info
+     stop
+  end if
+
+  v = A
+
+  A = A_copy
+  B = B_copy
+
+  deallocate(work, A_copy, B_copy)
+
+end subroutine eigen_gen_sym
+
+
+subroutine eigen_sym(A, v, W)
+  implicit none
+
+  ! Arrays (allocatable-kompatibel)
+  real(8), intent(inout) :: A(:,:)   ! wird von LAPACK überschrieben
+  real(8), intent(out)   :: v(:,:)   ! Eigenvektoren
+  real(8), intent(out)   :: W(:)     ! Eigenwerte
+
+  ! Lokale Variablen
+  integer :: n, lda, info, lwork
+  real(8), allocatable :: work(:)
+  real(8) :: work_query(1)
+  real(8), allocatable :: a_copy(:,:)
+
+  ! Dimension bestimmen
+  n   = size(A,1)
+  lda = n
+
+  ! Original sichern (optional, wie bei dir)
+  allocate(a_copy(n,n))
+  a_copy = A
+
+  ! Workspace Query
+  lwork = -1
+  call dsyev('V','U', n, A, lda, W, work_query, lwork, info)
+
+  lwork = int(work_query(1))
+  allocate(work(lwork))
+
+  ! LAPACK Aufruf
+  call dsyev('V','U', n, A, lda, W, work, lwork, info)
+
+  if (info /= 0) then
+     print *, "Fehler bei DSYEV, INFO =", info
+     stop
+  end if
+
+  ! Eigenvektoren sichern
+  v = A
+
+  ! Originalmatrix wiederherstellen (wie in deinem Code)
+  A = a_copy
+
+  ! Aufräumen
+  deallocate(work, a_copy)
+
+end subroutine eigen_sym
+
+
+
+
+
+
+end module sidechainhead_refstruc

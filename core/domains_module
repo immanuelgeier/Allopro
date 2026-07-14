@@ -1,0 +1,156 @@
+module domains_module
+
+use topology_module
+
+implicit none
+
+private
+
+public :: domain_library_type
+public :: domain_type
+public :: init_domain_library
+public :: init_domain_maps
+
+!=========================================================
+! DOMAIN TYPE
+!=========================================================
+type :: domain_type
+
+    character(40) :: name = ''
+
+    integer :: nres = 0
+    integer :: first_res = 0
+    integer :: last_res  = 0
+
+    integer, allocatable :: resid(:)
+
+    ! optional atom mapping (derived)
+    integer :: natom = 0
+    integer, allocatable :: atom_list(:)
+
+end type domain_type
+
+
+!=========================================================
+! DOMAIN LIBRARY
+!=========================================================
+type :: domain_library_type
+
+    integer :: ndomain = 0
+    type(domain_type), allocatable :: domain(:)
+
+    ! mapping arrays (filled per state)
+    integer, allocatable :: res_to_domain(:)
+    integer, allocatable :: atom_to_domain(:)
+
+end type domain_library_type
+
+
+contains
+
+!=========================================================
+! INIT DOMAIN DEFINITIONS (PDZ EXAMPLE)
+!=========================================================
+subroutine init_domain_library(lib)
+
+    implicit none
+    type(domain_library_type), intent(out) :: lib
+
+    ! PDZ example from paper
+    lib%ndomain = 2
+    allocate(lib%domain(lib%ndomain))
+
+    !-----------------------------------------------------
+    ! DOMAIN 1: N-terminal β-region (example grouping)
+    ! β1 (6–12), β2 (20–24)
+    !-----------------------------------------------------
+    lib%domain(1)%name = 'DOMAIN_1'
+    lib%domain(1)%nres = 2
+
+    allocate(lib%domain(1)%resid(2))
+    lib%domain(1)%resid = (/ 1, 2 /)   ! will be mapped later to real res indices
+
+    !-----------------------------------------------------
+    ! DOMAIN 2: rest (helices + β3-β5 simplified)
+    !-----------------------------------------------------
+    lib%domain(2)%name = 'DOMAIN_2'
+    lib%domain(2)%nres = 1
+
+    allocate(lib%domain(2)%resid(1))
+    lib%domain(2)%resid = (/ 3 /)
+
+end subroutine init_domain_library
+
+
+!=========================================================
+! BUILD RESIDUE + ATOM MAPS
+!=========================================================
+subroutine init_domain_maps(lib, istate, topologies)
+
+    implicit none
+
+    type(domain_library_type), intent(inout) :: lib
+    type(topology_set_type), intent(in) :: topologies
+    integer, intent(in) :: istate
+
+    integer :: i, j, k
+    integer :: nres, natom
+    integer :: res_idx
+    integer :: astart, aend
+
+    character(3) :: rname
+
+    nres  = topologies%state(istate)%topo%nres
+    natom = topologies%state(istate)%topo%natom
+
+    !-----------------------------------------------------
+    ! allocate mapping arrays
+    !-----------------------------------------------------
+    if (allocated(lib%res_to_domain)) deallocate(lib%res_to_domain)
+    if (allocated(lib%atom_to_domain)) deallocate(lib%atom_to_domain)
+
+    allocate(lib%res_to_domain(nres))
+    allocate(lib%atom_to_domain(natom))
+
+    lib%res_to_domain  = 0
+    lib%atom_to_domain = 0
+
+    !=====================================================
+    ! RESIDUE -> DOMAIN mapping
+    !=====================================================
+    do i = 1, lib%ndomain
+
+        do j = 1, lib%domain(i)%nres
+
+            res_idx = lib%domain(i)%resid(j)
+
+            if (res_idx >= 1 .and. res_idx <= nres) then
+                lib%res_to_domain(res_idx) = i
+            end if
+
+        end do
+
+    end do
+
+
+    !=====================================================
+    ! ATOM -> DOMAIN mapping (derived)
+    !=====================================================
+    do i = 1, nres
+
+        if (lib%res_to_domain(i) == 0) cycle
+
+        astart = topologies%state(istate)%topo%acid_start_list(i)
+        natom  = topologies%state(istate)%topo%acid_size(i)
+        aend   = astart + natom - 1
+
+        do k = astart, aend
+            lib%atom_to_domain(k) = lib%res_to_domain(i)
+        end do
+
+    end do
+
+end subroutine init_domain_maps
+
+
+end module domains_module

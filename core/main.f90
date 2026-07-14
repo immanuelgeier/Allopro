@@ -1,0 +1,934 @@
+program main
+
+use system_module
+use project_module
+use topology_module
+use analysis_plan_module
+use analysis_executor_module
+use time_window_file_mapping
+use test_time_window_file_mapping
+use time_window_loader
+use sidechains
+use sidechainhead_refstruc
+use domains_module
+use domain_refstruc
+!use tra_lift_module
+use direction_vectors_analyse_plan_module	
+use healpix_sampling_plan_module
+use healpix_analysis_execution_module_single_lag
+
+implicit none
+
+type(project_type)           :: project
+type(topology_set_type)      :: topologies
+type(analysis_plan_type)     :: plan
+type(sidechain_library_type) :: sc_lib
+type(domain_library_type)    :: dom_lib
+type(cv_plan)                :: cv_plan1
+integer :: irep,istate
+
+type(replica_selector_type) :: rep_selector
+type(sampling_plan)         :: train_plan
+
+integer :: seed(1)
+
+
+call initialize_system(project,topologies)
+
+call project_setting(project)
+call analyze_project_frames(project)
+
+
+call print_project_summary(project)
+
+
+!write(0,*) "making plan"
+!
+!call add_step(plan,"orientation")
+!call add_step(plan,"covariance")
+!
+!
+!!call plan_setting(plan,topo)
+!
+!
+!call print_plan(plan)
+!call test_window_map(project)
+!call test_window_loader
+!stop
+!
+
+call init_resnames_and_sidechain_head_groups(sc_lib)
+
+call init_sidechain_head(sc_lib)
+
+call make_sc_res_maps( &
+     lib        = sc_lib, &
+     istate     = 1, &
+     topologies = topologies )
+     
+
+call compute_freq_and_resids(sc_lib, 1, topologies)
+
+!!call test_sidechain_head_maps(1,sc_lib,topologies)
+!
+!call ref_from_frames(1,1,1,sc_lib,topologies,project)
+!
+!!call test_get_ref_from_frames(sc_lib,topologies,project)
+!
+!call init_domain_maps(topologies%state(1),dom_lib,topologies)
+!!call ref_from_frames_domains(1,dom_lib,topologies,project)
+!
+!call ref_from_frames_domains(1,1,1,dom_lib,topologies,project)
+!
+!call test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project)
+!
+write(0,*)trim(project%rootdir)//'/ouput/'//trim(project%state(1)%name)//'/replicate_1/'//'domain_lib.txt'
+call init_domain_maps(topologies%state(1),dom_lib,topologies)
+
+if(1==2) then
+call find_common_ref(1,1,sc_lib,dom_lib)
+write(0,*) allocated(dom_lib%domain(1)%res_ids)
+	
+
+call write_domain_library(trim(project%rootdir)//'/output/'&
+//trim(project%state(1)%name)//'/replicate_1/'//'domain_lib.txt', dom_lib)
+
+call write_sidechain_library(trim(project%rootdir)//'/output/'&
+//trim(project%state(1)%name)//'/replicate_1/'//'sidechain_lib.txt', sc_lib)
+
+end if
+
+
+
+call read_domain_library(trim(project%rootdir)//'/output/'&
+//trim(project%state(1)%name)//'/replicate_1/'//'domain_lib.txt', dom_lib)
+
+call read_sidechain_library(trim(project%rootdir)//'/output/'&
+//trim(project%state(1)%name)//'/replicate_1/'//'sidechain_lib.txt', sc_lib)
+
+call random_seed(put=[42, 42, 42, 42, 42, 42, 42, 42])
+
+call make_cv_plan(topologies,sc_lib,dom_lib,cv_plan1)
+
+
+! 1. Selector für den State initialisieren (z.B. State 1 hat 10 Replikate)
+call init_replica_selector(rep_selector, nrep_total=project%state(1)%nrep)
+
+! 2. Selektives Ausschalten für Cross-Validation (z.B. die letzten beiden weglassen)
+rep_selector%is_active(3:10) = .false.
+
+!! 3. Plan mit dem konfigurierten Selector initialisieren 
+!call init_sampling_plan(train_plan, project, istate=1, L=1000000, &
+!                        mode=SHUFFLE_INTER_REPLICA, selector=rep_selector)
+                        
+call execute_healpix_analysis( &
+        project      = project, &
+        cv_p         = cv_plan1, &
+        istate       = 1, &
+        L            = 100000, &
+        mode         = SHUFFLE_INTER_REPLICA, &
+        selector     = rep_selector, &
+        tau          = 100)
+stop
+!call test_lift_cv_plan(cv_plan1,project)
+!test_healpix_density(tstart,tend,big_interval,tau,plan,project)
+!do irep=1,10
+!call test_healpix_density(1,1000000,1000,100,cv_plan1,project,1,irep,1)
+!end do
+!call test_lifting(topologies,sc_lib,dom_lib,project,6,7)
+write(0,*) 'all done'
+contains
+
+
+
+
+subroutine write_sidechain_library(filename, lib)
+
+    implicit none
+
+    character(*), intent(in) :: filename
+    type(sidechain_library_type), intent(in) :: lib
+
+    integer :: u,i,j
+    logical :: res_is_in_protein
+
+    open(newunit=u,file=filename,status="replace",action="write")
+
+    write(u,'(A,I0)') "NCV ",lib%ncv
+
+    do i=1,lib%ncv
+        write(u,'(A,I0)') "FREQ ",lib%residue(i)%freq
+        if(lib%residue(i)%freq==0) cycle
+
+        write(u,'(A,1X,A)') "RESNAME",trim(lib%residue(i)%resname)
+
+        write(u,'(A,I0)') "NATOM_ALL ",lib%residue(i)%natom_all
+        write(u,'(A,I0)') "NATOM_HEAD ",lib%residue(i)%natom_head
+        
+        write(u,'(A,L1)') "HAS_SYM ",lib%residue(i)%has_sym
+
+        write(u,'(A,1X,A,1X,A)') "DIR1", &
+             trim(lib%residue(i)%dir1_atom_1), &
+             trim(lib%residue(i)%dir1_atom_2)
+
+        write(u,'(A,1X,A,1X,A)') "DIR2", &
+             trim(lib%residue(i)%dir2_atom_1), &
+             trim(lib%residue(i)%dir2_atom_2)
+
+        write(u,'(A)') "D1_REF"
+        write(u,'(3F24.16)') lib%residue(i)%d1_ref
+
+        write(u,'(A)') "D2_REF"
+        write(u,'(3F24.16)') lib%residue(i)%d2_ref
+
+        write(u,'(A)') "MAP"
+        write(u,*) size(lib%residue(i)%map)
+        write(u,*) lib%residue(i)%map
+
+        write(u,'(A)') "RES_IDS"
+        write(u,*) size(lib%residue(i)%res_ids)
+        write(u,*) lib%residue(i)%res_ids
+
+        write(u,'(A)') "REF_XYZ"
+        write(u,*) size(lib%residue(i)%ref_xyz,2)
+
+        do j=1,size(lib%residue(i)%ref_xyz,2)
+            write(u,'(3F24.16)') lib%residue(i)%ref_xyz(:,j)
+        end do
+
+        if(allocated(lib%residue(i)%cv)) then
+            write(u,'(A)') "CV"
+            write(u,*) size(lib%residue(i)%cv,1),size(lib%residue(i)%cv,2)
+
+            do j=1,size(lib%residue(i)%cv,2)
+                write(u,'(3F24.16)') lib%residue(i)%cv(:,j)
+            end do
+        endif
+
+        if(allocated(lib%residue(i)%cv_id)) then
+            write(u,'(A)') "CV_ID"
+            write(u,*) size(lib%residue(i)%cv_id,1),size(lib%residue(i)%cv_id,2)
+
+            do j=1,size(lib%residue(i)%cv_id,2)
+                write(u,'(3F24.16)') lib%residue(i)%cv_id(:,j)
+            end do
+        endif
+
+        if(allocated(lib%residue(i)%order)) then
+            write(u,'(A)') "ORDER"
+            write(u,*) size(lib%residue(i)%order)
+            write(u,*) lib%residue(i)%order
+        endif
+
+        if(allocated(lib%residue(i)%perms)) then
+            write(u,'(A)') "PERMS"
+            write(u,*) size(lib%residue(i)%perms,1),size(lib%residue(i)%perms,2)
+
+            do j=1,size(lib%residue(i)%perms,2)
+                write(u,*) lib%residue(i)%perms(:,j)
+            end do
+        endif
+
+        write(u,'(A)') "END_RESIDUE"
+
+    end do
+
+    close(u)
+
+end subroutine
+
+
+subroutine read_sidechain_library(filename,lib)
+
+    implicit none
+
+    character(*),intent(in) :: filename
+    type(sidechain_library_type),intent(out) :: lib
+    logical :: res_is_in_protein     
+    integer :: u,i,j,n,n1,n2
+    character(32) :: key
+
+    open(newunit=u,file=filename,status="old",action="read")
+
+    read(u,*) key,lib%ncv
+    allocate(lib%residue(lib%ncv))
+    !read(u,*)
+    do i=1,lib%ncv
+        read(u,*) key,lib%residue(i)%freq
+        if(lib%residue(i)%freq==0) cycle
+        !read(u,*)
+        !read(u,*) key
+        
+
+        read(u,*) key,lib%residue(i)%resname
+        read(u,*) key,lib%residue(i)%natom_all
+        read(u,*) key,lib%residue(i)%natom_head
+        
+        read(u,*) key,lib%residue(i)%has_sym
+
+        read(u,*) key, &
+             lib%residue(i)%dir1_atom_1, &
+             lib%residue(i)%dir1_atom_2
+
+        read(u,*) key, &
+             lib%residue(i)%dir2_atom_1, &
+             lib%residue(i)%dir2_atom_2
+
+        read(u,*) key
+        read(u,*) lib%residue(i)%d1_ref
+
+        read(u,*) key
+        read(u,*) lib%residue(i)%d2_ref
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%map(n))
+        read(u,*) lib%residue(i)%map
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%res_ids(n))
+        read(u,*) lib%residue(i)%res_ids
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%ref_xyz(3,n))
+
+        do j=1,n
+            read(u,*) lib%residue(i)%ref_xyz(:,j)
+        end do
+
+        read(u,*) key
+
+        if(trim(key)=="CV") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%cv(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%cv(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="CV_ID") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%cv_id(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%cv_id(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="ORDER") then
+
+            read(u,*) n
+            allocate(lib%residue(i)%order(n))
+            read(u,*) lib%residue(i)%order
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="PERMS") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%perms(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%perms(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        ! key sollte jetzt END_RESIDUE sein
+
+    end do
+
+    close(u)
+
+end subroutine
+
+subroutine write_domain_library(filename, lib)
+
+    character(*), intent(in) :: filename
+    type(domain_library_type), intent(in) :: lib
+
+    integer :: i,j,u,n
+
+    open(newunit=u,file=filename,status="replace",action="write")
+
+    write(u,'(A,I0)') "NDOMAINS ",lib%ndo
+
+    do i=1,lib%ndo
+
+        write(u,*)
+        write(u,'(A)') "DOMAIN"
+
+        write(u,'(A,1X,A)') "NAME",trim(lib%domain(i)%domain_name)
+
+        write(u,'(A,I0)') "NATOM_ALL ",lib%domain(i)%natom_all
+        write(u,'(A,I0)') "NATOM_KEEP ",lib%domain(i)%natom_keep
+        write(u,'(A,I0)') "NRES ",lib%domain(i)%nres_dom
+
+        write(u,'(A,I0)') "START_ATOM ",lib%domain(i)%start_atom
+        write(u,'(A,I0)') "END_ATOM ",lib%domain(i)%end_atom
+
+        write(u,'(A,1X,A,1X,A)') "DIR1", &
+             trim(lib%domain(i)%dir1_atom_1), &
+             trim(lib%domain(i)%dir1_atom_2)
+
+        write(u,'(A,1X,A,1X,A)') "DIR2", &
+             trim(lib%domain(i)%dir2_atom_1), &
+             trim(lib%domain(i)%dir2_atom_2)
+
+        write(u,'(A)') "D1_REF"
+        write(u,'(3F24.16)') lib%domain(i)%d1_ref
+
+        write(u,'(A)') "D2_REF"
+        write(u,'(3F24.16)') lib%domain(i)%d2_ref
+        write(u,'(A)') "MAP"
+        n=size(lib%domain(i)%map)
+        write(u,*) n
+        write(u,*) (lib%domain(i)%map(j), j=1,n)
+        write(u,'(A)') "RES_IDS"
+        n=lib%domain(i)%nres_dom
+        write(u,*) size(lib%domain(i)%res_ids)
+        write(u,*) lib%domain(i)%res_ids
+        write(u,'(A)') "REF_XYZ"
+        write(u,*) size(lib%domain(i)%ref_xyz,2)
+
+        do j=1,size(lib%domain(i)%ref_xyz,2)
+            write(u,'(3F24.16)') lib%domain(i)%ref_xyz(:,j)
+        end do
+
+        
+         if (allocated(lib%domain(i)%cv)) then
+            write(u,'(A)') "CV"
+            write(u,*) size(lib%domain(i)%cv,2)
+
+            do j=1,size(lib%domain(i)%cv,2)
+                write(u,'(3F24.16)') lib%domain(i)%cv(:,j)
+            end do
+        endif
+
+                write(u,'(A)') "END_DOMAIN"
+    end do
+
+    close(u)
+
+end subroutine
+   
+subroutine read_domain_library(filename, lib)
+
+    character(*), intent(in)  :: filename
+    type(domain_library_type), intent(out) :: lib
+
+    integer :: u
+    integer :: i,j,n,nresdom
+
+    character(32) :: key
+
+    open(newunit=u,file=filename,status="old",action="read")
+
+    !-----------------------------
+    ! Anzahl Domains
+    !-----------------------------
+    read(u,*) key, lib%ndo
+    allocate(lib%domain(lib%ndo))
+
+    do i=1,lib%ndo
+
+        ! Leerzeile
+        read(u,*)
+
+        ! DOMAIN
+        read(u,*) key
+        write(0,*) key
+
+        ! NAME
+        read(u,*) key, lib%domain(i)%domain_name
+write(0,*) key
+        ! NATOM_ALL
+        read(u,*) key, lib%domain(i)%natom_all
+write(0,*) key
+        ! NATOM_KEEP
+        read(u,*) key, lib%domain(i)%natom_keep
+write(0,*) key
+        ! NRES
+        read(u,*) key, lib%domain(i)%nres_dom
+write(0,*) key
+        ! START_ATOM
+        read(u,*) key, lib%domain(i)%start_atom
+write(0,*) key
+        ! END_ATOM
+         read(u,*) key, lib%domain(i)%end_atom
+write(0,*) key
+        ! DIR1
+        read(u,*) key, lib%domain(i)%dir1_atom_1, &
+                  lib%domain(i)%dir1_atom_2
+write(0,*) key
+        ! DIR2
+        read(u,*) key, lib%domain(i)%dir2_atom_1, &
+                  lib%domain(i)%dir2_atom_2
+write(0,*) key
+        ! D1_REF
+        read(u,*) key
+        read(u,*) lib%domain(i)%d1_ref
+write(0,*) key
+        ! D2_REF
+        read(u,*) key
+        read(u,*) lib%domain(i)%d2_ref
+write(0,*) key
+        !-----------------------------
+        ! MAP
+        !-----------------------------
+        read(u,*) key
+        read(u,*) n
+write(0,*) key
+        allocate(lib%domain(i)%map(n))
+        read(u,*) lib%domain(i)%map
+        
+        !-----------------------------
+        ! RES_IDS
+        !-----------------------------
+        read(u,*) key
+        read(u,*) nresdom
+write(0,*) n,nresdom,'n',lib%domain(i)%map,key
+!pause
+        allocate(lib%domain(i)%res_ids(nresdom))
+        read(u,*) lib%domain(i)%res_ids !Bad integer
+
+
+        !-----------------------------
+        ! REF_XYZ
+        !-----------------------------
+        read(u,*) key
+        read(u,*) n
+
+        allocate(lib%domain(i)%ref_xyz(3,n))
+
+        do j=1,n
+            read(u,*) lib%domain(i)%ref_xyz(:,j)
+        end do
+
+        !-----------------------------
+        ! CV
+        !-----------------------------
+        read(u,*) key
+
+        if(trim(key)=="CV") then
+
+            read(u,*) n
+
+            allocate(lib%domain(i)%cv(2,n))
+
+            do j=1,n
+                read(u,*) lib%domain(i)%cv(:,j)
+            end do
+
+            read(u,*) key      ! END_DOMAIN
+
+        else
+            ! Falls keine CV gespeichert wurde,
+            ! ist key bereits END_DOMAIN.
+        endif
+
+    end do
+
+    close(u)
+
+end subroutine
+        
+subroutine find_common_ref(istat,irep,sc_lib_opt,dom_lib_opt)
+
+implicit none
+integer,intent(in) :: istat,irep
+type(time_window) :: window
+integer :: start_search,end_search,stride_search
+integer :: itest,nttest,ct,i,j1(1)
+real(8), allocatable :: stats_b(:),stats_s(:)
+real(8), allocatable :: all_stats_b(:,:),all_stats_s(:,:)
+real(8) :: sum_res
+type(sidechain_library_type) ,intent(inout):: sc_lib_opt
+type(domain_library_type)    ,intent(inout):: dom_lib_opt
+integer :: isc,idom,cc,ca,j
+real(8), allocatable  :: min_sc(:),min_do(:)
+integer, allocatable  :: mini_sc(:),mini_do(:)
+
+
+start_search =1
+end_search   =100000
+stride_search=1000
+
+nttest=(end_search-start_search+1)
+nttest=nttest/stride_search
+
+
+call ref_from_frames(1,1,1,sc_lib,topologies,project)
+
+
+call init_domain_maps(topologies%state(1),dom_lib,topologies)
+call ref_from_frames_domains(1,1,1,dom_lib,topologies,project)
+ca=0
+do isc=1,sc_lib%ncv
+do i=1,min(sc_lib%residue(isc)%freq,1)
+ca=ca+1
+end do
+end do
+write(0,*)'number of occurrent res',ca
+pause
+
+call test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
+
+!write(0,*) nttest,size(stats_b),size(stats_s)
+!pause
+allocate(all_stats_b(nttest,size(stats_b)))
+allocate(all_stats_s(nttest,size(stats_s)))
+allocate(min_do(dom_lib%ndo))
+allocate(min_sc(ca))
+allocate(mini_do(size(min_do)))
+allocate(mini_sc(size(min_sc)))
+
+ct=0
+min_sc=100000._8
+min_do=100000._8
+do itest=start_search,end_search,stride_search
+     ct=ct+1
+     call ref_from_frames(itest,1,1,sc_lib,topologies,project)
+     
+     !call test_get_ref_from_frames(sc_lib,topologies,project)
+     
+     
+     !call ref_from_frames_domains(1,dom_lib,topologies,project)
+     
+     call ref_from_frames_domains(itest,1,1,dom_lib,topologies,project)
+     
+     call test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
+     all_stats_b(ct,:)=stats_b
+     all_stats_s(ct,:)=stats_s
+     
+     cc=0
+     ca=0
+     do isc=1,sc_lib%ncv
+        sum_res=0._8
+        do i=1,sc_lib%residue(isc)%freq
+            if(i==1) ca=ca+1
+            j=sc_lib%residue(isc)%res_ids(i)
+            cc=cc+1
+            sum_res=sum_res+stats_s(cc)
+            write(0,*)ca, cc,stats_s(cc),sc_lib%residue(isc)%resname!,sum_res,'sum',min_sc(ca)>sum_res,CA
+        if(min_sc(ca)>sum_res) then
+           sc_lib_opt%residue(isc)=sc_lib%residue(isc)
+        min_sc(ca) =sum_res
+        mini_sc(ca)=ct
+        end if
+	    end do
+     end do
+     
+     do i=1,dom_lib%ndo
+      if(stats_b(i)<min_do(i)) then
+      	dom_lib_opt%domain(i)=dom_lib%domain(i)
+      	mini_do(i)=ct
+      end if
+     end do
+end do
+
+
+ca=0
+     do isc=1,sc_lib%ncv
+        do i=1,min(sc_lib%residue(isc)%freq,1) 
+            ca=ca+1   
+                write(0,*)sc_lib_opt%residue(isc)%resname
+                write(0,*)ca,   sc_lib_opt%residue(isc)%cv(1,:)
+                write(0,*)ca,   sc_lib_opt%residue(isc)%cv(2,:)
+                write(0,*) sqrt(min_sc(ca)/dble(sc_lib%residue(isc)%freq)),mini_sc(ca)
+	            write(0,*)
+         end do
+     end do
+
+     
+     do i=1,dom_lib_opt%ndo
+         write(0,*) all_stats_b(:,i),'domain instability',i,mini_do(i)
+         write(0,*) dom_lib_opt%domain(i)%cv(1,:)
+         write(0,*) dom_lib_opt%domain(i)%cv(2,:)
+         write(0,*) 
+     end do
+
+     
+     
+     
+     
+
+end subroutine
+
+
+
+
+
+
+subroutine test_window_loader
+implicit none
+integer ::i,ntstep,nt
+type(time_window) :: window
+type(window_map)  :: map
+type(raw_data_block) :: block
+logical,allocatable  :: window_mask(:) 
+
+
+window%istate =1
+window%irep   =1
+window%start_time_step =1
+window%end_time_step   =2
+
+ntstep=window%end_time_step-window%start_time_step+1
+
+allocate(window_mask(ntstep))
+window_mask=.true.
+
+
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+
+    nt=count(window_mask)
+    write(0,*) block%istate
+    
+    do i=1,nt
+    write(0,*) block%xyz(:,1,i)
+    end do
+    
+window%istate =1
+window%irep   =1
+window%start_time_step =2
+window%end_time_step   =3
+
+ntstep=window%end_time_step-window%start_time_step+1
+
+!allocate(window_mask(ntstep))
+window_mask=.true.
+
+!call get_window_map(window, project, map)
+call print_window_map(window, map)
+
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+
+    nt=count(window_mask)
+    write(0,*) block%istate
+    
+    do i=1,nt
+    write(0,*) block%xyz(:,1,i),i
+    end do
+    
+    
+end subroutine test_window_loader
+
+
+subroutine project_setting(project)
+implicit none
+
+integer :: i,j,k,ndcd_dummy
+
+type(project_type), intent(inout) :: project
+
+
+do i=1,project%nstate
+
+           
+    do j=1,project%state(i)%nrep
+    ndcd_dummy=project%state(i)%rep(j)%ndcd
+    write(0,*) ndcd_dummy
+     
+    allocate(project%state(i)%rep(j)%ignore_first_per_dcd(ndcd_dummy))
+    allocate(project%state(i)%rep(j)% ignore_last_per_dcd(ndcd_dummy))
+    allocate(project%state(i)%rep(j)% nframes_per_dcd_raw(ndcd_dummy))
+    allocate(project%state(i)%rep(j)% nframes_per_dcd_use(ndcd_dummy))
+
+        do k=1,project%state(i)%rep(j)%ndcd
+        
+             project%state(i)%rep(j)%ignore_first_per_dcd(k) = 1
+             project%state(i)%rep(j)%ignore_last_per_dcd(k)  = 1
+             project%state(i)%rep(j)%offset_start=0!100010!100000
+             project%state(i)%rep(j)%offset_end  =0
+             project%state(i)%rep(j)%nlast_natom_ignore=0
+             project%state(i)%rep(j)%nfirst_natom_to_read&
+             = topologies%state(i)%topo%natom
+        end do
+
+    end do
+
+end do
+
+end subroutine
+
+subroutine plan_setting(plan,topo)
+implicit none
+
+integer :: i,j
+
+type(analysis_plan_type), intent(inout) :: plan
+type(topology_type), intent(in)         :: topo
+
+
+plan%settings%block_size=2**15
+plan%settings%dry_run = .false.
+plan%settings%mode = 2
+
+!plan%settings%nfirst_natom_to_read=topo%natom-plan%settings%nlast_natom_ignore
+
+!allocate( plan%settings%atom_mask( plan%settings%nfirst_natom_to_read))
+allocate( plan%settings%frame_mask( plan%settings%block_size))
+!plan%settings%frame_mask=.false.
+
+do i=1,plan%settings%block_size,1
+plan%settings%frame_mask(i)=.true.
+end do
+
+
+
+
+end subroutine
+
+
+
+
+
+
+subroutine make_plan() 
+implicit none
+integer :: i,j,k,fdcd,natomdcd
+
+    write(0,*)
+    write(0,*) '================================'
+    write(0,*) 'PROJECT SUMMARY'
+    write(0,*) '================================'
+
+    write(0,*) 'states:',project%nstate
+
+    do i=1,project%nstate
+        write(0,*)
+        write(0,*) 'state:',trim(project%state(i)%name)
+        write(0,*) 'pdb  :',trim(project%state(i)%pdb_ref)
+        write(0,*) 'replicates:',project%state(i)%nrep
+
+        do j=1,project%state(i)%nrep
+            write(0,*) '  rep',j
+            write(0,*) '     dir :',trim(project%state(i)%rep(j)%dcd_dir)
+            write(0,*) '     ndcd:',project%state(i)%rep(j)%ndcd
+            do k=1,project%state(i)%rep(j)%ndcd
+                write(0,*) 'file:',trim(project%state(i)%rep(j)%dcd_files(k))
+                call read_dcd_header(trim(project%state(i)%rep(j)%dcd_files(k)),fdcd,natomdcd)
+                write(0,*) 'frames in dcd',fdcd,'atoms in dcd', natomdcd
+                pause
+            end do
+        end do
+    end do
+
+    write(0,*)
+
+end subroutine make_plan 
+
+
+
+subroutine test_topology(topo)
+
+    use topology_module
+    implicit none
+
+    type(topology_type), intent(in) :: topo
+
+    integer :: i
+    integer :: nshow
+
+    write(0,*) ''
+    write(0,*) '================================'
+    write(0,*) 'TOPOLOGY DEBUG TEST'
+    write(0,*) '================================'
+
+    !====================================================
+    ! BASIC INFO
+    !====================================================
+    write(0,*) 'natom =', topo%natom
+    write(0,*) 'nres  =', topo%nres
+
+    if (topo%natom <= 0) then
+        write(0,*) 'ERROR: no atoms loaded'
+        return
+    end if
+
+    !====================================================
+    ! ATOM TABLE (first entries)
+    !====================================================
+    write(0,*) ''
+    write(0,*) 'First atoms:'
+
+    nshow = min(20, topo%natom)
+
+    do i = 1, nshow
+        write(0,'(I6,2X,A4,2X,A3,2X,I6,2X,3F10.3)') &
+            i, &
+            topo%atom_id(i), &
+            topo%acid_id(i), &
+            topo%acid_number(i), &
+            topo%refx(i), topo%refy(i), topo%refz(i)
+    end do
+
+    !====================================================
+    ! RESIDUE CHECK
+    !====================================================
+    write(0,*) ''
+    write(0,*) 'Residue mapping check:'
+
+    do i = 1, nshow
+        write(0,*) 'atom', i, '-> residue', topo%residx(i)
+    end do
+
+    !====================================================
+    ! CONSISTENCY CHECKS
+    !====================================================
+    write(0,*) ''
+    write(0,*) 'Consistency checks:'
+
+    if (.not. allocated(topo%atom_id)) then
+        write(0,*) 'ERROR: atom_id not allocated'
+    end if
+
+    if (.not. allocated(topo%residx)) then
+        write(0,*) 'ERROR: residx not allocated'
+    end if
+
+    if (size(topo%residx) /= topo%natom) then
+        write(0,*) 'WARNING: residx size mismatch'
+    end if
+
+    write(0,*) ''
+    write(0,*) '================================'
+    write(0,*) 'DEBUG TEST DONE'
+    write(0,*) '================================'
+
+end subroutine test_topology
+
+
+subroutine analysis_test_example
+implicit none
+integer :: i,j,k
+
+
+
+end subroutine analysis_test_example
+
+end program main

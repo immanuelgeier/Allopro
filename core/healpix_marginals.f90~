@@ -1,0 +1,100 @@
+module healpix_marginals_module
+    use healpix_types
+    implicit none
+    private
+
+    public :: healpix_marginals, calculate_marginals, allocate_marginals, deallocate_marginals
+
+    type :: healpix_marginals
+        integer :: npix_fine
+        integer :: nobject
+
+        ! Zweidimensionale Marginalverteilungen
+        integer, allocatable :: xy(:,:,:,:) 
+        integer, allocatable :: xz(:,:,:,:) 
+        integer, allocatable :: yz(:,:,:,:) ! Wichtig für TE
+
+        ! Eindimensionale Marginalverteilungen
+        integer, allocatable :: x(:,:,:)    
+        integer, allocatable :: y(:,:,:)    
+        integer, allocatable :: z(:,:,:)    
+    end type healpix_marginals
+
+contains
+
+    subroutine allocate_marginals(marg, npix_fine, nobject)
+        type(healpix_marginals), intent(out) :: marg
+        integer, intent(in)                  :: npix_fine
+        integer, intent(in)                  :: nobject
+
+        marg%npix_fine = npix_fine
+        marg%nobject   = nobject
+
+        allocate(marg%xy(npix_fine, npix_fine, nobject, nobject), source=0)
+        allocate(marg%xz(npix_fine, npix_fine, nobject, nobject), source=0)
+        allocate(marg%yz(npix_fine, npix_fine, nobject, nobject), source=0)
+
+        allocate(marg%x(npix_fine, nobject, nobject), source=0)
+        allocate(marg%y(npix_fine, nobject, nobject), source=0)
+        allocate(marg%z(npix_fine, nobject, nobject), source=0)
+    end subroutine allocate_marginals
+
+    subroutine deallocate_marginals(marg)
+        type(healpix_marginals), intent(inout) :: marg
+        if (allocated(marg%xy)) deallocate(marg%xy)
+        if (allocated(marg%xz)) deallocate(marg%xz)
+        if (allocated(marg%yz)) deallocate(marg%yz)
+        if (allocated(marg%x))  deallocate(marg%x)
+        if (allocated(marg%y))  deallocate(marg%y)
+        if (allocated(marg%z))  deallocate(marg%z)
+    end subroutine deallocate_marginals
+
+    ! Entkoppelte Berechnung: Wir übergeben die Arrays direkt!
+subroutine calculate_marginals(raw_counts, fine_to_sparse, npix_fine, marg)
+    integer(4), intent(in)                 :: raw_counts(:,:,:)
+    integer, intent(in)                    :: fine_to_sparse(0:, 0:, 0:) ! Flexibel ab 0
+    integer, intent(in)                    :: npix_fine
+    type(healpix_marginals), intent(inout) :: marg
+
+    integer :: ix, iy, iz, idx_sparse
+    integer :: i, j, count_val
+
+    
+    write(0,*) marg%nobject
+    pause
+    ! === KORREKTUR 1: Keine harten Nullen mehr hier, wenn akkumuliert werden soll! ===
+    ! Wenn du die Marginalien komplett frisch berechnen willst, machst du das 
+    ! Zurücksetzen jetzt explizit vor dem Aufruf im Hauptprogramm.
+
+    ! === KORREKTUR 2: Schleifen laufen von 0 bis npix_fine - 1 ===
+    do iz = 0, npix_fine - 1
+        do iy = 0, npix_fine - 1
+            do ix = 0, npix_fine - 1
+                
+                idx_sparse = fine_to_sparse(ix, iy, iz)
+                if (idx_sparse <= 0) cycle 
+
+                do j = 1, marg%nobject
+                    do i = 1, marg%nobject
+                        count_val = raw_counts(idx_sparse, i, j)
+                        if (count_val == 0) cycle
+
+                        ! 2D (Die Pixel-Indizes als Array-Positionen müssen in Fortran 
+                        ! weiterhin bei 1 starten, daher fügen wir +1 für die Ziel-Arrays hinzu)
+                        marg%xy(ix+1, iy+1, i, j) = marg%xy(ix+1, iy+1, i, j) + count_val
+                        marg%xz(ix+1, iz+1, i, j) = marg%xz(ix+1, iz+1, i, j) + count_val
+                        marg%yz(iy+1, iz+1, i, j) = marg%yz(iy+1, iz+1, i, j) + count_val
+
+                        ! 1D
+                        marg%x(ix+1, i, j) = marg%x(ix+1, i, j) + count_val
+                        marg%y(iy+1, i, j) = marg%y(iy+1, i, j) + count_val
+                        marg%z(iz+1, i, j) = marg%z(iz+1, i, j) + count_val
+                    end do
+                end do
+
+            end do
+        end do
+    end do
+end subroutine calculate_marginals
+
+end module healpix_marginals_module

@@ -1,0 +1,231 @@
+module analysis_executor_module
+
+use project_module
+use analysis_plan_module
+use dcd_reader
+use adaptive_stream_module
+
+implicit none
+
+!=========================================================
+type :: analysis_result_type
+    character(64) :: name = ''
+    real :: value = 0.0
+end type
+
+contains
+
+!=========================================================
+subroutine run_step(step, block, result)
+
+    type(analysis_step_type), intent(in) :: step
+    type(traj_block_type), intent(in) :: block
+    type(analysis_result_type), intent(inout) :: result
+
+    result%name = step%name
+    result%value = real(block%nframes)
+
+    write(*,*) "STEP:", trim(step%name), &
+               "frames:", block%nframes
+
+end subroutine
+
+!=========================================================
+subroutine execute_plan(project, plan)
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+
+    integer :: istate, irep
+
+    if (plan%settings%dry_run) then
+        call print_dry_run(project, plan)
+        return
+    end if
+
+    do istate = 1, project%nstate
+        do irep = 1, project%state(istate)%nrep
+            call execute_replicate(project, plan, istate, irep)
+        end do
+    end do
+
+end subroutine
+
+subroutine execute_replicate(project, plan, istate, irep)
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+    integer, intent(in) :: istate, irep
+    integer :: i
+
+    type(adaptive_stream_type) :: stream
+    type(traj_block_type) :: block
+    type(analysis_result_type) :: result
+    integer :: istep
+
+    !=========================================================
+    ! INIT STREAM
+    !=========================================================
+    call adaptive_init_stream(stream, istate, irep, plan%settings%block_size)
+    call adaptive_preload(stream, project)
+
+    !=========================================================
+    ! DEBUG
+    !=========================================================
+    write(*,*) "AFTER PRELOAD"
+    write(*,*) "================ STREAM DEBUG ================"
+    write(*,*) "state/rep:", istate, irep
+    write(*,*) "finished :", stream%finished
+    write(*,*) "ifile    :", stream%ifile
+    write(*,*) "iframe   :", stream%iframe
+    write(*,*) "blocksize:", stream%blocksize
+
+   write(*,*) "cur nframes:", stream%block(stream%cur)%nframes
+   write(*,*) "nxt nframes:", stream%block(stream%nxt)%nframes
+  !write(*,*) "cur nframes:", stream%block(stream%cur)%nframes_loaded
+  !write(*,*) "nxt nframes:", stream%block(stream%nxt)%nframes_loaded
+
+    write(*,*) "============================================="
+
+    !=========================================================
+    ! MAIN LOOP
+    !=========================================================
+    do while (.not. stream%finished)
+
+        ! aktuelle Daten IMMER aus cur
+        block = stream%block(stream%cur)
+
+        write(0,*) 'BLOCK LOADED'
+        write(0,*) 'with shape', shape(block%pos)
+        write(0,*) 'with shape', block%pos(1,1,1)
+        
+ 
+        
+        do i=25000-10,25000+10
+        write(0,*)block%pos(1,1,i)
+        end do
+        
+       !write(*,*) 'natoms = ', block%natoms_loaded
+       !write(*,*) 'nframes= ', block%nframes_loaded
+       pause
+        do istep = 1, plan%nstep
+            call run_step(plan%step(istep), block, result)
+        end do
+
+        call adaptive_advance(stream, project)
+
+    end do
+
+end subroutine
+
+!=========================================================
+subroutine run_file_mode(project, plan, istate, irep)
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+    integer, intent(in) :: istate, irep
+
+    integer :: itask, istep
+    type(traj_block_type) :: block
+    type(analysis_result_type) :: result
+    character(400) :: fname
+
+    do itask = 1, project%state(istate)%rep(irep)%ndcd
+
+        fname = project%state(istate)%rep(irep)%dcd_files(itask)
+
+        call read_dcd_into_block(fname, block%pos, block%natoms, block%nframes)
+
+        do istep = 1, plan%nstep
+            call run_step(plan%step(istep), block, result)
+        end do
+
+    end do
+
+end subroutine
+
+!=========================================================
+subroutine run_stream_mode(project, plan, istate, irep)
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+    integer, intent(in) :: istate, irep
+
+    type(adaptive_stream_type) :: stream
+    type(traj_block_type) :: block
+    type(analysis_result_type) :: result
+    integer :: istep
+
+    call adaptive_init_stream(stream, istate, irep, plan%settings%block_size)
+    call adaptive_preload(stream, project)
+
+    do while (.not. stream%finished)
+
+        block = stream%block(stream%cur)
+
+        do istep = 1, plan%nstep
+            call run_step(plan%step(istep), block, result)
+        end do
+
+        call adaptive_advance(stream, project)
+
+    end do
+
+end subroutine
+
+!=========================================================
+subroutine print_dry_run(project, plan)
+
+    type(project_type), intent(in) :: project
+    type(analysis_plan_type), intent(in) :: plan
+
+    integer :: istate, irep, ifile, istep
+
+    write(*,*)
+    write(*,*) '================================'
+    write(*,*) 'DRY RUN'
+    write(*,*) '================================'
+
+    write(*,*) 'mode      :', plan%settings%mode
+    write(*,*) 'block size:', plan%settings%block_size
+
+    write(*,*)
+    write(*,*) 'analysis steps:'
+
+    do istep = 1, plan%nstep
+        write(*,*) '   ', trim(plan%step(istep)%name)
+    end do
+
+    write(*,*)
+
+    do istate = 1, project%nstate
+
+        write(*,*)
+        write(*,*) 'state:', trim(project%state(istate)%name)
+
+        do irep = 1, project%state(istate)%nrep
+
+            write(*,*) '  replicate:', irep
+            write(*,*) '  ndcd     :', &
+                project%state(istate)%rep(irep)%ndcd
+
+            do ifile = 1, min(3, project%state(istate)%rep(irep)%ndcd)
+
+                write(*,*) '     ', &
+                    trim(project%state(istate)%rep(irep)%dcd_files(ifile))
+
+            end do
+
+            if (project%state(istate)%rep(irep)%ndcd > 3) then
+                write(*,*) '...'
+                write(*,*) trim(project%state(istate)%rep(irep)%dcd_files( &
+                    project%state(istate)%rep(irep)%ndcd))
+            end if
+
+        end do
+
+    end do
+
+end subroutine
+
+end module analysis_executor_module
