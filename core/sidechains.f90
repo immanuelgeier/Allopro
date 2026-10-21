@@ -13,10 +13,14 @@ public :: compute_freq_and_resids
 public :: init_resnames_and_sidechain_head_groups
 public :: init_sidechain_head
 public :: make_sc_res_maps
+public :: read_sidechain_library
+public :: write_sidechain_library
+public :: clear_sidechain_library
 
 !=========================================================
 type :: residue_cv_type
-
+    
+    logical :: active
     character(3) :: resname = ''
 
     integer :: natom_all  = 0
@@ -52,6 +56,29 @@ type :: sidechain_library_type
 end type
 
 contains
+subroutine clear_sidechain_library(sc_lib)
+    implicit none
+    type(sidechain_library_type), intent(inout) :: sc_lib
+    integer :: i
+
+    if (allocated(sc_lib%residue)) then
+        do i = 1, size(sc_lib%residue)
+            if (allocated(sc_lib%residue(i)%ref_xyz))    deallocate(sc_lib%residue(i)%ref_xyz)
+            if (allocated(sc_lib%residue(i)%cv))         deallocate(sc_lib%residue(i)%cv)
+            if (allocated(sc_lib%residue(i)%cv_id))      deallocate(sc_lib%residue(i)%cv_id)
+            if (allocated(sc_lib%residue(i)%map))        deallocate(sc_lib%residue(i)%map)
+            if (allocated(sc_lib%residue(i)%atom_names)) deallocate(sc_lib%residue(i)%atom_names)
+            if (allocated(sc_lib%residue(i)%res_ids))    deallocate(sc_lib%residue(i)%res_ids)
+            if (allocated(sc_lib%residue(i)%perms))      deallocate(sc_lib%residue(i)%perms)
+            if (allocated(sc_lib%residue(i)%order))      deallocate(sc_lib%residue(i)%order)
+        end do
+        deallocate(sc_lib%residue)
+    end if
+    
+    sc_lib%ncv = 0
+end subroutine clear_sidechain_library
+
+
 
 subroutine init_resnames_and_sidechain_head_groups(lib)
 
@@ -213,9 +240,9 @@ lib%residue(6)%cv_id(2,4)= 1._8/2._8
 lib%residue(7)%resname = 'ASN'
 allocate(lib%residue(7)%atom_names(4))
 lib%residue(7)%atom_names = (/ &
-    'CA  ','CG  ','OD1 ','ND2 ' /)
+    'CB  ','CG  ','OD1 ','ND2 ' /)
     
-lib%residue(7)%dir1_atom_1="CA  "
+lib%residue(7)%dir1_atom_1="CB  "
 lib%residue(7)%dir1_atom_2="CG "
 lib%residue(7)%dir2_atom_1="OD1  "
 lib%residue(7)%dir2_atom_2="ND2 "
@@ -443,11 +470,12 @@ subroutine make_sc_res_maps(lib, istate, topologies)
     do j = 1,size(lib%residue)
 
         resname = lib%residue(j)%resname
+        
         if(resname == 'HID' .or. resname == 'HIE') resname = 'HIS'
 
         ind_res = -1
 
-        do i = 1,nres
+        do i = 2,nres-1
 
             !==================================================
             ! Normale Aminosäuren
@@ -500,8 +528,24 @@ subroutine make_sc_res_maps(lib, istate, topologies)
             end if
 
         end do
+        
+
 
         if(ind_res < 0) cycle
+        
+  !f (trim(lib%residue(j)%resname) == 'PRO') then
+  ! write(0,*) 'Library residue: ', j, trim(lib%residue(j)%resname)
+  ! write(0,*) 'Selected topology residue: ', ind_res
+  ! write(0,*) 'Topology residue name: ', &
+  !     trim(topologies%state(istate)%topo%resnames(ind_res))
+  !
+  ! res_start_atom = topologies%state(istate)%topo%acid_start_list(ind_res)
+  ! natom_res      = topologies%state(istate)%topo%acid_size(ind_res)
+  !
+  ! do k = res_start_atom,res_start_atom+natom_res-1
+  !     write(0,*) trim(topologies%state(istate)%topo%atom_id(k))
+  ! end do
+  !end if
 
         res_start_atom = topologies%state(istate)%topo%acid_start_list(ind_res)
         natom_res      = topologies%state(istate)%topo%acid_size(ind_res)
@@ -511,7 +555,6 @@ subroutine make_sc_res_maps(lib, istate, topologies)
         lib%residue(j)%map = -1
 
         do k = res_start_atom,res_start_atom+natom_res-1
-
             do l = 1,lib%residue(j)%natom_head
 
                 if(trim(adjustl(topologies%state(istate)%topo%atom_id(k))) == &
@@ -522,26 +565,35 @@ subroutine make_sc_res_maps(lib, istate, topologies)
                 end if
 
             end do
-
         end do
+    
+   !if (trim(lib%residue(j)%resname) == 'PRO') then
+   !write(0,*) 'PRO map:'
+   !do l = 1,lib%residue(j)%natom_head
+   !    write(0,*) trim(lib%residue(j)%atom_names(l)), &
+   !               lib%residue(j)%map(l)
+   !               
+   !end do
+   !end if
 
     end do
+
 
     deallocate(his_used)
     
     
-write(0,*)'final'
+
 do i=1,lib%ncv
 if(allocated(lib%residue(i)%map)) then
 	allocate(lib%residue(i)%order(lib%residue(i)%natom_head))
 call argsort_int( lib%residue(i)%map,lib%residue(i)%order)
-
-write(0,*)lib%residue(i)%map(:),'map'
-write(0,*) lib%residue(i)%order,'order'
+!write(0,*) lib%residue(i)%resname
+!write(0,*)lib%residue(i)%map(:),'map'
+!write(0,*) lib%residue(i)%order,'order'
 end if
 end do
 
-pause
+!pause
 
 
 end subroutine
@@ -716,6 +768,221 @@ subroutine compute_freq_and_resids(lib, istate, topologies)
 end subroutine
 
 
+
+subroutine write_sidechain_library(filename, lib)
+
+    implicit none
+
+    character(*), intent(in) :: filename
+    type(sidechain_library_type), intent(in) :: lib
+
+    integer :: u,i,j
+    logical :: res_is_in_protein
+
+    open(newunit=u,file=filename,status="replace",action="write")
+
+    write(u,'(A,I0)') "NCV ",lib%ncv
+
+    do i=1,lib%ncv
+        write(u,'(A,I0)') "FREQ ",lib%residue(i)%freq
+        if(lib%residue(i)%freq==0) cycle
+
+        write(u,'(A,1X,A)') "RESNAME",trim(lib%residue(i)%resname)
+
+        write(u,'(A,I0)') "NATOM_ALL ",lib%residue(i)%natom_all
+        write(u,'(A,I0)') "NATOM_HEAD ",lib%residue(i)%natom_head
+        
+        write(u,'(A,L1)') "HAS_SYM ",lib%residue(i)%has_sym
+
+        write(u,'(A,1X,A,1X,A)') "DIR1", &
+             trim(lib%residue(i)%dir1_atom_1), &
+             trim(lib%residue(i)%dir1_atom_2)
+
+        write(u,'(A,1X,A,1X,A)') "DIR2", &
+             trim(lib%residue(i)%dir2_atom_1), &
+             trim(lib%residue(i)%dir2_atom_2)
+
+        write(u,'(A)') "D1_REF"
+        write(u,'(3F24.16)') lib%residue(i)%d1_ref
+
+        write(u,'(A)') "D2_REF"
+        write(u,'(3F24.16)') lib%residue(i)%d2_ref
+
+        write(u,'(A)') "MAP"
+        write(u,*) size(lib%residue(i)%map)
+        write(u,*) lib%residue(i)%map
+
+        write(u,'(A)') "RES_IDS"
+        write(u,*) size(lib%residue(i)%res_ids)
+        write(u,*) lib%residue(i)%res_ids
+
+        write(u,'(A)') "REF_XYZ"
+        write(u,*) size(lib%residue(i)%ref_xyz,2)
+
+        do j=1,size(lib%residue(i)%ref_xyz,2)
+            write(u,'(3F24.16)') lib%residue(i)%ref_xyz(:,j)
+        end do
+
+        if(allocated(lib%residue(i)%cv)) then
+            write(u,'(A)') "CV"
+            write(u,*) size(lib%residue(i)%cv,1),size(lib%residue(i)%cv,2)
+
+            do j=1,size(lib%residue(i)%cv,2)
+                write(u,'(3F24.16)') lib%residue(i)%cv(:,j)
+            end do
+        endif
+
+        if(allocated(lib%residue(i)%cv_id)) then
+            write(u,'(A)') "CV_ID"
+            write(u,*) size(lib%residue(i)%cv_id,1),size(lib%residue(i)%cv_id,2)
+
+            do j=1,size(lib%residue(i)%cv_id,2)
+                write(u,'(3F24.16)') lib%residue(i)%cv_id(:,j)
+            end do
+        endif
+
+        if(allocated(lib%residue(i)%order)) then
+            write(u,'(A)') "ORDER"
+            write(u,*) size(lib%residue(i)%order)
+            write(u,*) lib%residue(i)%order
+        endif
+
+        if(allocated(lib%residue(i)%perms)) then
+            write(u,'(A)') "PERMS"
+            write(u,*) size(lib%residue(i)%perms,1),size(lib%residue(i)%perms,2)
+
+            do j=1,size(lib%residue(i)%perms,2)
+                write(u,*) lib%residue(i)%perms(:,j)
+            end do
+        endif
+
+        write(u,'(A)') "END_RESIDUE"
+
+    end do
+
+    close(u)
+
+end subroutine
+
+
+subroutine read_sidechain_library(filename,lib)
+
+    implicit none
+
+    character(*),intent(in) :: filename
+    type(sidechain_library_type),intent(out) :: lib
+    logical :: res_is_in_protein     
+    integer :: u,i,j,n,n1,n2
+    character(32) :: key
+
+    open(newunit=u,file=filename,status="old",action="read")
+
+    read(u,*) key,lib%ncv
+    allocate(lib%residue(lib%ncv))
+    !read(u,*)
+    do i=1,lib%ncv
+        read(u,*) key,lib%residue(i)%freq
+        if(lib%residue(i)%freq==0) cycle
+        !read(u,*)
+        !read(u,*) key
+        
+
+        read(u,*) key,lib%residue(i)%resname
+        read(u,*) key,lib%residue(i)%natom_all
+        read(u,*) key,lib%residue(i)%natom_head
+        
+        read(u,*) key,lib%residue(i)%has_sym
+
+        read(u,*) key, &
+             lib%residue(i)%dir1_atom_1, &
+             lib%residue(i)%dir1_atom_2
+
+        read(u,*) key, &
+             lib%residue(i)%dir2_atom_1, &
+             lib%residue(i)%dir2_atom_2
+
+        read(u,*) key
+        read(u,*) lib%residue(i)%d1_ref
+
+        read(u,*) key
+        read(u,*) lib%residue(i)%d2_ref
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%map(n))
+        read(u,*) lib%residue(i)%map
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%res_ids(n))
+        read(u,*) lib%residue(i)%res_ids
+
+        read(u,*) key
+        read(u,*) n
+        allocate(lib%residue(i)%ref_xyz(3,n))
+
+        do j=1,n
+            read(u,*) lib%residue(i)%ref_xyz(:,j)
+        end do
+
+        read(u,*) key
+
+        if(trim(key)=="CV") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%cv(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%cv(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="CV_ID") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%cv_id(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%cv_id(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="ORDER") then
+
+            read(u,*) n
+            allocate(lib%residue(i)%order(n))
+            read(u,*) lib%residue(i)%order
+
+            read(u,*) key
+
+        endif
+
+        if(trim(key)=="PERMS") then
+
+            read(u,*) n1,n2
+            allocate(lib%residue(i)%perms(n1,n2))
+
+            do j=1,n2
+                read(u,*) lib%residue(i)%perms(:,j)
+            end do
+
+            read(u,*) key
+
+        endif
+
+        ! key sollte jetzt END_RESIDUE sein
+
+    end do
+
+    close(u)
+
+end subroutine
                 
                    
 end module sidechains

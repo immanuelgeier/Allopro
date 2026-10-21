@@ -37,8 +37,8 @@ subroutine initialize_system(project, topologies)
     type(topology_set_type), intent(inout) :: topologies
 
     character(400) :: pdb_file
-
-    integer :: istate
+    character(400) :: domain_file
+    integer :: istate,idom
     integer :: natom
 
     !-----------------------------------------------------
@@ -73,11 +73,14 @@ subroutine initialize_system(project, topologies)
         write(0,*) '-----------------------------------'
 
         pdb_file = project%state(istate)%pdb_ref
-
-        topologies%state(istate)%pdb_file = pdb_file
-
+        domain_file = project%state(istate)%domains_ref
+        
+        topologies%state(istate)%pdb_file    = pdb_file
+        topologies%state(istate)%domain_file = domain_file
         write(0,*) 'reference pdb:'
         write(0,*) trim(pdb_file)
+        write(0,*) 'domaine file:'
+        write(0,*) trim(domain_file)
 
         !-------------------------------------------------
         ! count atoms
@@ -102,7 +105,11 @@ subroutine initialize_system(project, topologies)
         call read_pdb( &
             pdb_file, &
             topologies%state(istate)%topo)
-
+        
+        !-------------------------------------------------
+        ! read domains
+        !-------------------------------------------------    
+        call read_domains(domain_file,topologies%state(istate))
         !-------------------------------------------------
         ! build residue structure
         !-------------------------------------------------
@@ -117,6 +124,13 @@ subroutine initialize_system(project, topologies)
 
         write(0,*) 'residues =', &
             topologies%state(istate)%topo%nres
+         
+        write(0,*)'ndomains', topologies%state(istate)%ndomain
+        
+        do idom=1,topologies%state(istate)%ndomain
+             write(0,*)'idom', idom,topologies%state(istate)%domain(idom)%name
+        end do
+        
 
     end do
 
@@ -125,7 +139,7 @@ subroutine initialize_system(project, topologies)
     write(0,*) 'ALL TOPOLOGIES INITIALIZED'
     write(0,*) 'nstates =', topologies%nstate
     write(0,*) '==================================='
-
+    !pause
 end subroutine initialize_system
 
 

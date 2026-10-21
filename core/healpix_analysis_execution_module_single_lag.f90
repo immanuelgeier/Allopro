@@ -18,16 +18,6 @@ implicit none
 contains
 
 
-subroutine test_mapping
-implicit none
-integer :: no
-integer :: nside,npix
-
-nside=1
-npix=12*(4*nside**2
-
-end subroutine test_mapping
-
 
 
 subroutine sample_fine_one_particle_hist(block_data, nside_max, hist)
@@ -546,7 +536,7 @@ subroutine precalculate_block_pair_healpix_trajectory(project, cv_p, plan, tau, 
       do idx_frame = 1, size(data_Z_shuffle%vec, 3)
         do obj = 1, size(data_Z_shuffle%vec, 2)
             
-            ! Drehe jeden einzelnen kartesischen Richtungsvektor global im Raum
+            ! nomrmieren
             data_Z_shuffle%vec(:, obj, idx_frame) =  data_Z_shuffle%vec(:, obj, idx_frame)&
             /norm2( data_Z_shuffle%vec(:, obj, idx_frame))
             

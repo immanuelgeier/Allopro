@@ -10,6 +10,93 @@ use topolgy_module
 
 contains
 
+
+subroutine ref_from_frames_single_domain(time,icv,irep,istate,lib,topologies,project)
+implicit none
+integer :: istate,irep,time_step,i,j,k,nt,ntstep,time
+type(time_window):: window
+type(window_map)  :: map
+type(raw_data_block) :: block
+type(project_type), intent(in) :: project
+type(sidechain_library_type), intent(inout) ::lib
+
+character*4            :: atom_name
+logical,allocatable  :: window_mask(:) 
+integer, allocatable :: ref_time_steps(:)
+logical, allocatable :: atom_groups(:)
+logical, allocatable :: activ_dom(:)
+integer, intent(in) :: icv
+integer :: method
+integer :: iatom,nhead,na,ng,ires
+real(8),allocatable :: coords(:,:,:),struc(:,:) 
+integer :: ncv_all,ncoords,ngroup
+integer,allocatable :: g_start(:),g_size(:)
+real(8) :: v11(3),v12(3),v21(3),v22(3)
+type(topology_set_type) :: topologies
+type(raw_data_block), intent(in)             :: block
+
+
+   ncoords=0
+   ngroup=0
+   ires=0
+
+   ! end do
+    
+    do j=1,lib%residue(icv)%natom_head
+         iatom=lib%residue(icv)%map(j)+topologies%state(window%istate)%topo%acid_start_list(ires)-1
+         
+        ! write(0,*) 'natom', iatom,'j',j,'start_list',topologies%state(window%istate)%topo%acid_start_list(ires)&
+        ! ,'##########',na,topologies%state(window%istate)%topo%acid_start_list(ires)
+         
+         coords(:,na,time)             =block%xyz(:,iatom,1)
+         lib%residue(icv)%ref_xyz(:,j) =block%xyz(:,iatom,1)
+         na=na+1
+         
+        atom_name=topologies%state(window%istate)%topo%atom_id(iatom)
+        k=0
+        if(trim(lib%residue(icv)%dir1_atom_1)==trim(atom_name)) then
+        v11=lib%residue(icv)%ref_xyz(:,j)
+        k=1
+        end if
+        if(trim(lib%residue(icv)%dir1_atom_2)==trim(atom_name)) then
+        v12=lib%residue(icv)%ref_xyz(:,j)
+        k=2
+        end if
+        
+        if(trim(lib%residue(icv)%dir2_atom_1)==trim(atom_name)) then
+        v21=lib%residue(icv)%ref_xyz(:,j)
+        k=3
+        end if
+        if(trim(lib%residue(icv)%dir2_atom_2)==trim(atom_name)) then
+        v22=lib%residue(icv)%ref_xyz(:,j)
+        k=4
+        end if
+        write(0,*) trim(atom_name),k
+        write(0,*)    trim(lib%residue(icv)%dir1_atom_1)==trim(atom_name)&
+                     ,trim(lib%residue(icv)%dir1_atom_2)==trim(atom_name)&
+                     ,trim(lib%residue(icv)%dir2_atom_1)==trim(atom_name)&
+                     ,trim(lib%residue(icv)%dir2_atom_2)==trim(atom_name)
+        
+     end do
+     lib%residue(icv)%d1_ref(:)=v12-v11
+     lib%residue(icv)%d2_ref(:)=v22-v21
+     
+     write(0,*)'group coord x',lib%residue(icv)%ref_xyz(1,:)
+     write(0,*)'group coord y',lib%residue(icv)%ref_xyz(2,:)
+     write(0,*)'group coord z',lib%residue(icv)%ref_xyz(3,:)
+     write(0,*)
+     write(0,*) 'd_ref 1',lib%residue(icv)%d1_ref(:),lib%residue(icv)%dir1_atom_1,lib%residue(icv)%dir1_atom_2
+     write(0,*) 'd_ref 2',lib%residue(icv)%d2_ref(:),lib%residue(icv)%dir2_atom_1,lib%residue(icv)%dir2_atom_2
+     write(0,*)
+     
+     call direction_vecs_ref_inv(lib%residue(icv)%natom_head,lib%residue(icv)%ref_xyz&
+          ,lib%residue(icv)%d1_ref,lib%residue(icv)%d2_ref,lib%residue(icv)%cv)
+     
+  end do       
+    
+end subroutine
+
+
 subroutine ref_from_frames_domains(time,irep,istate,lib,topologies,project)
 implicit none
 integer :: istate,irep,time_step,i,j,k,nt,ntstep,time

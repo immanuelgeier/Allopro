@@ -1,0 +1,154 @@
+module te_plot_module
+
+use project_module
+use topology_module
+use graphical_rep_module
+use io_pdb_module
+use direction_vectors_analyse_plan_module	
+use position_lift_module
+use time_window_file_mapping
+use time_window_loader
+use te_io_module
+
+
+contains
+
+subroutine te_rep_workflow(cv_p,project,topologies)
+implicit none
+real,allocatable :: pos(:,:),occ(:),beta(:)
+real,allocatable :: delta_te_matrix_sum(:)
+integer :: i
+logical, allocatable :: group(:),mask(:)
+character*1024 ::outfile
+type(raw_data_block) :: block
+type(time_window) :: window
+type(lifted_trajectory) :: lifted
+type(cv_plan) ,intent(in)  :: cv_p
+type(frame2plot) :: frame
+    type(topology_set_type), intent(in) :: topologies
+    type(project_type), intent(in) :: project
+
+    real(8), allocatable :: vecs(:,:), centroids(:,:)
+
+nshuflle=10
+msize=162
+
+frame%istate=1
+frame%irep=1
+frame%itime=1
+
+call load_te_data()
+
+open(1,file='te_sum_data.txt')
+do i=1,msize
+
+antisym_row_sum(i)=sum(anti_sym_te(i,:))
+antisym_col_sum(i)=sum(anti_sym_te(:,i))
+
+row_sum(i)=sum(delta_te_matrix(i,:))-delta_te_matrix(i,i)
+col_sum(i)=sum(delta_te_matrix(:,i))-delta_te_matrix(i,i)
+write(1,*) i,row_sum(i),col_sum(i),antisym_row_sum(i),antisym_col_sum(i)
+end do
+
+close(1)
+
+ window%istate          = frame%istate
+    window%irep            = frame%irep
+    window%start_time_step = frame%itime
+    window%end_time_step   = frame%itime
+
+    allocate(mask(1))
+    mask = .true.
+
+
+    !------------------------------------------
+    ! Load trajectory frame
+    !------------------------------------------
+
+    call load_raw_data_block( &
+         project, &
+         window, &
+         mask, &
+         block)
+
+
+    !------------------------------------------
+    ! Get direction vectors
+    !------------------------------------------
+
+    call lift_cv_plan(cv_p, block, lifted)
+
+    allocate(vecs(3,size(lifted%vec,2)))
+    vecs = lifted%vec(:,:,1)
+
+
+    !------------------------------------------
+    ! Get centroid positions
+    !------------------------------------------
+
+    call lift_cv_plan_centroid(cv_p, block, lifted)
+
+    allocate(centroids(3,size(lifted%vec,2)))
+    centroids = lifted%vec(:,:,1)
+
+
+    !------------------------------------------
+    ! Original atom positions for PDB
+    !------------------------------------------
+
+    allocate(pos(3,size(block%xyz,2)))
+    pos = block%xyz(:,:,1)
+
+    allocate(occ(size(pos,2)))
+    allocate(beta(size(pos,2)))
+    allocate(group(size(pos,2)))
+
+    group = .true.
+    occ   = 0.0
+    beta  = 0.0
+    outfile='te_plot_pdb.pdb'
+call fill_pdb_occ_and_beta_sidechains(162,size(pos,2),9,cv_p,antisym_col_sum,beta,occ)
+beta=beta*10.
+occ=occ*10.
+    call write_subgroup_pdb( &
+         outfile, &
+         topologies%state(frame%istate)%topo, &
+         pos, &
+         occ, &
+         beta, &
+         group)
+
+         
+
+end subroutine te_rep_workflow
+
+subroutine fill_pdb_occ_and_beta_sidechains(ncv,natom,sst,cv_p,cv_vec,occ,beta)
+    implicit none
+    integer :: sst,i,ncv,natom,icv
+    real(8) :: cv_vec(ncv)
+    real(4) :: beta(natom),occ(natom)
+    type(cv_plan) ,intent(in)  :: cv_p
+    
+    integer :: target_idx
+
+    beta = 0.0
+    occ = 0.0
+
+    do i = 1, size(cv_p%term)
+       
+       ! Filter
+       if (cv_p%term(i)%target < sst) cycle
+       icv=cv_p%term(i)%target
+       write(0,*) icv,cv_vec(2*icv-1),cv_vec(2*icv)
+       occ (cv_p%term(i)%atom)=cv_vec(2*icv-1)
+       beta(cv_p%term(i)%atom)=cv_vec(2*icv)
+    end do
+
+end subroutine fill_pdb_occ_and_beta_sidechains
+
+
+
+
+
+
+end module te_plot_module

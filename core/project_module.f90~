@@ -26,6 +26,7 @@ type :: replicate_type
     logical :: consistent_nframes_across_rep_use = .true.
     integer :: nlast_natom_ignore
     integer :: nfirst_natom_to_read
+    integer :: n_frames_use_total
 end type
 
 
@@ -367,8 +368,112 @@ subroutine print_project_summary(project)
 
 end subroutine print_project_summary
 
-
 subroutine analyze_project_frames(project)
+
+    use dcd_header_reader
+    implicit none
+
+    type(project_type), intent(inout) :: project
+    type(dcd_header_info_type) :: info
+
+    integer :: istate
+    integer :: irep
+    integer :: idcd
+
+    integer :: ref_nframes_dcd
+    integer :: ref_nframes_dcd_use
+    integer :: ref_nframes_rep
+
+    integer :: nframes_use, nframe_use_rep
+
+    logical :: state_consistent
+
+    do istate = 1, project%nstate
+
+        state_consistent = .true.
+        ref_nframes_rep  = -1
+        
+        do irep = 1, project%state(istate)%nrep
+
+            nframe_use_rep = 0   ! Reset per Replikate
+            project%state(istate)%rep(irep)%n_frames_use_total = 0 ! Initialisieren
+
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .true.
+            project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .true.
+
+            ref_nframes_dcd     = -1
+            ref_nframes_dcd_use = -1
+
+            do idcd = 1, project%state(istate)%rep(irep)%ndcd
+                 write(0,*) 'Analysing  ',trim(project%state(istate)%rep(irep)%dcd_files(idcd)),'atoms and frames:  ', &
+                    info
+                call read_dcd_header_info( &
+                    project%state(istate)%rep(irep)%dcd_files(idcd), &
+                    info )
+
+                project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
+                    info%nframes_dcd_found_in_dcd
+
+                ! ----------------------------
+                ! Compute USE per DCD
+                ! ----------------------------
+                nframes_use = info%nframes_dcd_found_in_dcd &
+                    - project%state(istate)%rep(irep)%ignore_first_per_dcd(idcd) &
+                    - project%state(istate)%rep(irep)%ignore_last_per_dcd(idcd)
+
+                if (nframes_use < 0) nframes_use = 0 
+
+                nframe_use_rep = nframe_use_rep + nframes_use
+                project%state(istate)%rep(irep)%nframes_per_dcd_use(idcd) = nframes_use
+
+                ! ----------------------------
+                ! RAW & USE consistency check within replicate
+                ! ----------------------------
+                if (idcd == 1) then
+                    ! FIX: Hier stand vorher fälschlicherweise das gesamte Array auf der linken Seite.
+                    ! Es muss spezifisch das Element (idcd) zugewiesen werden.
+                    project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
+                        info%nframes_dcd_found_in_dcd
+
+                    ref_nframes_dcd     = info%nframes_dcd_found_in_dcd
+                    ref_nframes_dcd_use = nframes_use
+                else
+                    if (info%nframes_dcd_found_in_dcd /= ref_nframes_dcd) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_raw = .false.
+                    end if
+
+                    if (nframes_use /= ref_nframes_dcd_use) then
+                        project%state(istate)%rep(irep)%consistent_nframes_across_rep_use = .false.
+                    end if
+                end if
+
+            end do
+
+            ! Zuweisung der aggregierten nutzbaren Frames für dieses Replikat
+            project%state(istate)%rep(irep)%nframes_per_rep_use = nframe_use_rep
+            project%state(istate)%rep(irep)%n_frames_use_total  = nframe_use_rep
+
+            ! ----------------------------
+            ! Compare reps within state
+            ! ----------------------------
+            if (irep == 1) then
+                ref_nframes_rep = nframe_use_rep
+            else
+                if (project%state(istate)%rep(irep)%nframes_per_rep_use /= ref_nframes_rep) then
+                    state_consistent = .false.
+                end if
+            end if
+
+        end do
+
+        ! Globaler Konsistenz-Check für diesen Zustand über alle seine Replikate hinweg
+        project%state(istate)%consistent_nframes_per_rep_across_state_use = state_consistent
+
+    end do
+
+end subroutine analyze_project_frames
+
+subroutine analyze_project_frames_old(project)
 
     use dcd_header_reader
     implicit none

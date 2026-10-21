@@ -6,11 +6,129 @@ use sidechains
 use time_window_file_mapping
 use time_window_loader
 use sidechain_tensors
-
-
+!use position_lift_module
+use time_window_file_mapping
+use time_window_loader
 
 
 contains
+
+
+subroutine get_res_ref(time,istate,icv,ires,lib, topologies, block,xyz)
+
+integer, intent(in) :: time
+integer, intent(in) :: istate
+integer, intent(in) :: ires
+integer, intent(in) :: icv
+real(8),intent(out) , allocatable :: xyz(:,:)
+type(sidechain_library_type), intent(inout) :: lib
+type(topology_set_type), intent(in)          :: topologies
+type(raw_data_block), intent(in)             :: block
+
+if(allocated(xyz)) deallocate(xyz)
+allocate(xyz(3,lib%residue(icv)%natom_head))
+
+    do j = 1, lib%residue(icv)%natom_head
+
+  iatom = lib%residue(icv)%map(j) + &
+                topologies%state(istate)%topo%acid_start_list(lib%residue(icv)%res_ids(ires)) - 1
+
+        xyz(:,j) = block%xyz(:,iatom,time)
+   end do
+
+end subroutine
+
+subroutine ref_from_frame_single_res(time, istate,icv, ires, lib, topologies, block,use_sym)
+
+implicit none
+
+integer, intent(in) :: time
+integer, intent(in) :: istate
+integer, intent(in) :: ires
+integer, intent(in) :: icv
+
+type(sidechain_library_type), intent(inout) :: lib
+type(topology_set_type), intent(in)          :: topologies
+type(raw_data_block), intent(in)             :: block
+
+integer :: j
+integer :: iatom
+integer :: nhead
+
+real(8) :: v11(3), v12(3)
+real(8) :: v21(3), v22(3)
+
+character(len=4) :: atom_name
+logical, intent(in) :: use_sym
+
+
+    nhead = lib%residue(icv)%natom_head
+
+    if (.not. allocated(lib%residue(icv)%ref_xyz)) then
+        allocate(lib%residue(icv)%ref_xyz(3,nhead))
+    end if
+
+    if (.not. allocated(lib%residue(icv)%cv)) then
+        allocate(lib%residue(icv)%cv(2,nhead))
+    end if
+
+    v11 = 0.d0
+    v12 = 0.d0
+    v21 = 0.d0
+    v22 = 0.d0
+
+    do j = 1, nhead
+
+        iatom = lib%residue(icv)%map(j) + &
+                topologies%state(istate)%topo%acid_start_list(ires) - 1
+
+        lib%residue(icv)%ref_xyz(:,j) = block%xyz(:,iatom,time)
+
+        atom_name = topologies%state(istate)%topo%atom_id(iatom)
+
+        if (trim(lib%residue(icv)%dir1_atom_1) == trim(atom_name)) &
+            v11 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir1_atom_2) == trim(atom_name)) &
+            v12 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir2_atom_1) == trim(atom_name)) &
+            v21 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir2_atom_2) == trim(atom_name)) &
+            v22 = lib%residue(icv)%ref_xyz(:,j)
+
+    end do
+
+    lib%residue(icv)%d1_ref = v12 - v11
+    lib%residue(icv)%d2_ref = v22 - v21
+
+    if (lib%residue(icv)%has_sym .and. use_sym) then
+
+        call direction_vecs_sym( &
+            lib%residue(icv)%natom_head, &
+            lib%residue(icv)%ref_xyz, &
+            lib%residue(icv)%cv_id, &
+            lib%residue(icv)%cv, &
+            lib%residue(icv)%order)
+
+    else
+
+        call direction_vecs_ref_inv( &
+            lib%residue(icv)%natom_head, &
+            lib%residue(icv)%ref_xyz, &
+            lib%residue(icv)%d1_ref, &
+            lib%residue(icv)%d2_ref, &
+            lib%residue(icv)%cv)
+
+    end if
+
+
+
+end subroutine ref_from_frame_single_res
+
+
+
 
 subroutine ref_from_frames(time,irep,istate,lib,topologies,project)
 implicit none

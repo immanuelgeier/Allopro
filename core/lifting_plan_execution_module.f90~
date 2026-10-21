@@ -1,0 +1,83 @@
+module lifting_plan_execution_module
+
+use lifting_plan_module
+use position_lift_module
+use direction_vectors_analyse_plan_module
+use project_module
+use lifted_trajectory_io_module
+use time_window_loader
+use refstruc_pbc_module
+contains
+
+
+subroutine execute_lifting_plan(cv_p,lifting_plan,project,ref)
+implicit none
+type(lifting_plan_type)  :: lifting_plan
+type(time_window)        :: window
+type(raw_data_block)     :: block
+type(lifted_trajectory)  :: lifted_tra
+type(cv_plan), intent(in):: cv_p
+type(project_type)       :: project
+type(refstruc_type), intent(in) :: ref
+
+
+integer :: irep,istate,iblock
+logical, allocatable :: mask(:)
+character*800 :: filename
+character*800 :: prefix
+integer :: n_obj,n_obj_pair
+integer ::iobj
+
+n_obj_pair =size(cv_p%object)
+n_obj      = 2*n_obj_pair
+
+do istate=1,size(lifting_plan%istates)
+do irep=1,lifting_plan%nreps(istate)
+do iblock=1,lifting_plan%nblock(istate,irep)
+
+call init_time_window_from_lifting_plan(lifting_plan,istate,irep,iblock,window,mask)
+
+write(0,*)'loading block'
+call load_raw_data_block(project, window, mask, block)
+
+call unwrap_xyz_block(ref, block%xyz,block%boxl)
+call lift_cv_plan(cv_p, block, lifted_tra)
+
+prefix=''
+prefix='lifted_tra'
+call make_filename_lifted_tra(istate,irep,iblock,prefix,filename)
+
+write(0,*) trim(filename)
+call write_trajectory(filename, lifted_tra)
+!call read_trajectory(filename,lifted_tra)
+end do
+end do
+end do
+
+
+end subroutine
+
+
+
+
+
+subroutine make_filename_lifted_tra(istate,irep,iblock,prefix,filename)
+
+   implicit none
+
+   integer, intent(in) :: istate
+   integer, intent(in) :: irep
+   integer, intent(in) :: iblock
+
+   character(*), intent(in)  :: prefix
+   character(*), intent(out) :: filename
+
+   write(filename,'(A,"_state",I4.4,"_rep",I4.4,"_block",I5.5,".bin")') &
+        trim(prefix), istate, irep, iblock
+
+end subroutine make_filename_lifted_tra
+
+
+
+
+end module 

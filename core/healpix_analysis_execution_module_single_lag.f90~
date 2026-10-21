@@ -17,6 +17,9 @@ implicit none
 
 contains
 
+
+
+
 subroutine sample_fine_one_particle_hist(block_data, nside_max, hist)
     implicit none
     type(healpix_block_trajectory), intent(in) :: block_data
@@ -119,7 +122,7 @@ subroutine execute_healpix_analysis(project, cv_p, istate, L, mode, selector, ta
     character(len=2)                :: tau_str
     real(8), allocatable :: te_matrix(:,:),  te_matrix_shuffle(:,:)
     character*200::filename
-    
+    type(joint_entropy_storage) :: entropies,entropies_shuffel
     integer :: bidx
     integer :: nside_max,total_sparse_entries
     integer :: nside_hist_sample
@@ -148,7 +151,7 @@ if(1==1) then
     call allocate_marginals(marg_real, lut%npix_fine, 2*size(cv_p%object))
     call allocate_marginals(marg_shuffle, lut%npix_fine, 2*size(cv_p%object))
          
-    do b_idx = 1,plan%nblocks_total
+    do b_idx = 1,2!plan%nblocks_total
         write(*, '(A,I4,A,I4)') " -> Processing  Block ", b_idx, " of ", plan%nblocks_total
         write(0,*) 
         
@@ -168,8 +171,14 @@ if(1==1) then
        
     end do
     
-     call calculate_marginals(hist%raw_counts, lut%fine_to_sparse, lut%npix_fine, marg_real)
+     filename=''
+     filename='entropy_short.txt'
     
+
+     call calculate_marginals(hist%raw_counts, lut%fine_to_sparse, lut%npix_fine, marg_real)
+     call calculate_all_entropies(hist%raw_counts, lut%fine_to_sparse, lut, marg_real, entropies)
+    
+     call save_entropies_gnuplot(trim(filename), entropies)
      !call print_1d_marginals(marg_real, "REAL RUN (TAU=" // trim(tau_str) // ")")
           
      call calculate_te_matrix(hist%raw_counts, lut%fine_to_sparse, lut, marg_real, te_matrix)
@@ -189,9 +198,15 @@ if(1==1) then
      call calculate_marginals(hist_shuffle%raw_counts, lut%fine_to_sparse, lut%npix_fine, marg_shuffle)
     
      !call print_1d_marginals(marg_shuffle, "SHUFFLE RUN (TAU=" // trim(tau_str) // ")")
-       
+     filename=''
+     filename='entropy_shuffel_short.txt'
+     	 
+     	 
+     	 
      call calculate_te_matrix(hist_shuffle%raw_counts, lut%fine_to_sparse, lut, marg_shuffle, te_matrix_shuffle)
      
+     call calculate_all_entropies(hist%raw_counts, lut%fine_to_sparse, lut, marg_shuffle, entropies_shuffel)
+     call save_entropies_gnuplot(trim(filename), entropies_shuffel)
        
      do i=1,size(te_matrix_shuffle,1)
         write(0,*) sum(te_matrix_shuffle(i,:)),'TE SUM_shuffle'
@@ -584,7 +599,7 @@ subroutine precalculate_block_pair_healpix_trajectory(project, cv_p, plan, tau, 
         call extract_backbone_bases(bidx, data_Z_shuffle, idx_past, rot_Z_shuffle)
         
         ! Die einzig konsistente relative Transformation berechnen
-        mat_rel = matmul(transpose(rot_Y), rot_Z_shuffle)
+        mat_rel =rot_Z_shuffle! matmul(transpose(rot_Y), rot_Z_shuffle)
 
         !mat_rel = matmul(rot_Y, transpose(rot_Z_shuffle))
         do obj = 1, n_obj

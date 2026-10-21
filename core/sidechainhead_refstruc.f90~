@@ -5,11 +5,366 @@ use topology_module
 use sidechains
 use time_window_file_mapping
 use time_window_loader
-
-
+use sidechain_tensors
+!use position_lift_module
+use time_window_file_mapping
+use time_window_loader
 
 
 contains
+
+
+subroutine get_res_ref(time,istate,icv,ires,lib, topologies, block,xyz)
+
+integer, intent(in) :: time
+integer, intent(in) :: istate
+integer, intent(in) :: ires
+integer, intent(in) :: icv
+real(8),intent(out) , allocatable :: xyz(:,:)
+type(sidechain_library_type), intent(inout) :: lib
+type(topology_set_type), intent(in)          :: topologies
+type(raw_data_block), intent(in)             :: block
+
+
+allocate(xyz(3,lib%residue(icv)%natom_head))
+
+    do j = 1, lib%residue(icv)%natom_head
+
+  iatom = lib%residue(icv)%map(j) + &
+                topologies%state(istate)%topo%acid_start_list(lib%residue(icv)%res_ids(ires)) - 1
+
+        xyz(:,j) = block%xyz(:,iatom,time)
+   end do
+
+end subroutine
+
+subroutine ref_from_frame_single_res(time, istate,icv, ires, lib, topologies, block,use_sym)
+
+implicit none
+
+integer, intent(in) :: time
+integer, intent(in) :: istate
+integer, intent(in) :: ires
+integer, intent(in) :: icv
+
+type(sidechain_library_type), intent(inout) :: lib
+type(topology_set_type), intent(in)          :: topologies
+type(raw_data_block), intent(in)             :: block
+
+integer :: j
+integer :: iatom
+integer :: nhead
+
+real(8) :: v11(3), v12(3)
+real(8) :: v21(3), v22(3)
+
+character(len=4) :: atom_name
+logical, intent(in) :: use_sym
+
+
+    nhead = lib%residue(icv)%natom_head
+
+    if (.not. allocated(lib%residue(icv)%ref_xyz)) then
+        allocate(lib%residue(icv)%ref_xyz(3,nhead))
+    end if
+
+    if (.not. allocated(lib%residue(icv)%cv)) then
+        allocate(lib%residue(icv)%cv(2,nhead))
+    end if
+
+    v11 = 0.d0
+    v12 = 0.d0
+    v21 = 0.d0
+    v22 = 0.d0
+
+    do j = 1, nhead
+
+        iatom = lib%residue(icv)%map(j) + &
+                topologies%state(istate)%topo%acid_start_list(ires) - 1
+
+        lib%residue(icv)%ref_xyz(:,j) = block%xyz(:,iatom,time)
+
+        atom_name = topologies%state(istate)%topo%atom_id(iatom)
+
+        if (trim(lib%residue(icv)%dir1_atom_1) == trim(atom_name)) &
+            v11 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir1_atom_2) == trim(atom_name)) &
+            v12 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir2_atom_1) == trim(atom_name)) &
+            v21 = lib%residue(icv)%ref_xyz(:,j)
+
+        if (trim(lib%residue(icv)%dir2_atom_2) == trim(atom_name)) &
+            v22 = lib%residue(icv)%ref_xyz(:,j)
+
+    end do
+
+    lib%residue(icv)%d1_ref = v12 - v11
+    lib%residue(icv)%d2_ref = v22 - v21
+
+    if (lib%residue(icv)%has_sym .and. use_sym) then
+
+        call direction_vecs_sym( &
+            lib%residue(icv)%natom_head, &
+            lib%residue(icv)%ref_xyz, &
+            lib%residue(icv)%cv_id, &
+            lib%residue(icv)%cv, &
+            lib%residue(icv)%order)
+
+    else
+
+        call direction_vecs_ref_inv( &
+            lib%residue(icv)%natom_head, &
+            lib%residue(icv)%ref_xyz, &
+            lib%residue(icv)%d1_ref, &
+            lib%residue(icv)%d2_ref, &
+            lib%residue(icv)%cv)
+
+    end if
+
+
+
+end subroutine ref_from_frame_single_res
+
+
+
+
+subroutine ref_from_frames(time,irep,istate,lib,topologies,project)
+implicit none
+integer :: istate,irep,time_step,i,j,k,nt,ntstep,time
+type(time_window):: window
+type(window_map)  :: map
+type(raw_data_block) :: block
+type(project_type), intent(in) :: project
+type(sidechain_library_type), intent(inout) ::lib
+
+character*4            :: atom_name
+logical,allocatable  :: window_mask(:) 
+integer, allocatable :: ref_time_steps(:)
+logical, allocatable :: atom_groups(:)
+logical, allocatable :: activ_res(:)
+integer :: method
+integer :: icv,iatom,nhead,na,ng,ires
+real(8),allocatable :: coords(:,:,:),struc(:,:) 
+integer :: ncv_all,ncoords,ngroup
+integer,allocatable :: g_start(:),g_size(:)
+real(8) :: v11(3),v12(3),v21(3),v22(3)
+type(topology_set_type) :: topologies
+logical :: use_sym
+
+
+use_sym=.true.
+!use_sym=.false.
+
+window%start_time_step=time
+window%end_time_step=time
+window%istate=1
+window%irep  =1
+ntstep=1
+
+allocate(activ_res(topologies%state(window%istate)%topo%nres))
+
+activ_res=.false.
+
+activ_res(2:93)=.true.
+!activ_res(4)  =.false.
+
+!pause
+!call get_window_map(window, project, map)
+!call print_window_map(window, map)
+allocate(window_mask(ntstep))
+window_mask=.true.
+!write(0,*) 'size test',size(window_mask),window%end_time_step-window%start_time_step+1
+!pause
+call load_raw_data_block( &
+    project, &
+    window, &
+    window_mask, &
+    block)
+
+    nt=count(window_mask)
+    !write(0,*) block%istate
+    
+    ncv_all=0
+    do i=1,lib%ncv
+        ncv_all=ncv_all+lib%residue(i)%freq
+    end do
+    
+   ncoords=0
+   ngroup=0
+   ires=0
+   do icv=1,lib%ncv
+        !write(0,*) 'Residue',lib%residue(icv)%resname
+        do i=1,lib%residue(icv)%freq
+          !write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ncoords=ncoords+nhead
+          ngroup=ngroup+1
+        end do
+    end do
+    
+    ng=0
+    
+          do icv=1,lib%ncv
+       
+        do i=1,lib%residue(icv)%freq
+        !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ng=ng+1
+          !write(0,*) 'Residue',lib%residue(icv)%resname
+          !write(0,*) ng
+          !write(0,*)  lib%residue(icv)%res_ids
+          !write(0,*) lib%residue(icv)%natom_head,'natom head'
+          !write(0,*)allocated(lib%residue(icv)%ref_xyz),'ref_xyz allocated?'
+          if(allocated(lib%residue(icv)%ref_xyz) .eqv. .false.) then
+          	  allocate(lib%residue(icv)%ref_xyz(3,lib%residue(icv)%natom_head))
+          	  allocate(lib%residue(icv)%cv(2,lib%residue(icv)%natom_head))
+          
+          end if
+          
+          !allocate(lib%residue(icv)%ref_xyz(3,lib%residue(icv)%natom_head ))
+          
+          end do
+          end do
+ncoords=0
+   ngroup=0
+   ires=0
+   do icv=1,lib%ncv
+        !write(0,*) 'Residue',lib%residue(icv)%resname
+        do i=1,lib%residue(icv)%freq
+          !write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ncoords=ncoords+nhead
+          ngroup=ngroup+1
+        end do
+    end do
+    
+    ng=0
+    
+          do icv=1,lib%ncv
+       
+        do i=1,lib%residue(icv)%freq
+        !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          nhead=lib%residue(icv)%natom_head
+          
+          if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+          ng=ng+1
+          !write(0,*) 'Residue',lib%residue(icv)%resname
+          !write(0,*) ng
+          !write(0,*)  lib%residue(icv)%res_ids
+          
+          end do
+          end do
+    !pause
+    
+    !allocate(coords(3,ncoords,nt))
+    
+    !write(0,*) ncoords, ngroup
+    !pause
+    allocate(g_start(ngroup))
+    allocate( g_size(ngroup))
+    
+
+  
+ng=0	
+na=1
+do icv=1,lib%ncv
+     !write(0,*) 'Residue',lib%residue(icv)%resname
+     do i=1,lib%residue(icv)%freq
+     !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+      nhead=lib%residue(icv)%natom_head
+      
+      if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
+      !write(0,*) lib%residue(icv)%res_ids(i),count(activ_res)
+      !write(0,*)  lib%residue(icv)%res_ids
+      ires=lib%residue(icv)%res_ids(i)
+      ng=ng+1
+     
+      !write(0,*)'Gruppe',ng
+      !pause
+      !pause
+      g_start(ng)=na
+      g_size(ng) =nhead          
+      
+     lib%residue(icv)%d1_ref=0.
+     lib%residue(icv)%d2_ref=0.
+     !write(0,*) 'time index',time	
+     !write(0,*) 'map',lib%residue(icv)%map,lib%residue(icv)%resname
+     !pause
+     do j=1,lib%residue(icv)%natom_head
+         iatom=lib%residue(icv)%map(j)+topologies%state(window%istate)%topo%acid_start_list(ires)-1
+         
+      !   write(0,*) 'natom', iatom,'j',j,'start_list',topologies%state(window%istate)%topo%acid_start_list(ires)&
+      !   ,'##########',na,topologies%state(window%istate)%topo%acid_start_list(ires)
+         
+         !coords(:,na,time)             =block%xyz(:,iatom,1)
+         lib%residue(icv)%ref_xyz(:,j) =block%xyz(:,iatom,1)
+         na=na+1
+         
+        atom_name=topologies%state(window%istate)%topo%atom_id(iatom)
+        k=0
+        if(trim(lib%residue(icv)%dir1_atom_1)==trim(atom_name)) then
+        v11=lib%residue(icv)%ref_xyz(:,j)
+        k=1
+        end if
+        if(trim(lib%residue(icv)%dir1_atom_2)==trim(atom_name)) then
+        v12=lib%residue(icv)%ref_xyz(:,j)
+        k=2
+        end if
+        
+        if(trim(lib%residue(icv)%dir2_atom_1)==trim(atom_name)) then
+        v21=lib%residue(icv)%ref_xyz(:,j)
+        k=3
+        end if
+        if(trim(lib%residue(icv)%dir2_atom_2)==trim(atom_name)) then
+        v22=lib%residue(icv)%ref_xyz(:,j)
+        k=4
+        end if
+       !write(0,*) trim(atom_name),k
+       !write(0,*)    trim(lib%residue(icv)%dir1_atom_1)==trim(atom_name)&
+       !             ,trim(lib%residue(icv)%dir1_atom_2)==trim(atom_name)&
+       !             ,trim(lib%residue(icv)%dir2_atom_1)==trim(atom_name)&
+       !             ,trim(lib%residue(icv)%dir2_atom_2)==trim(atom_name)
+        
+     end do
+     lib%residue(icv)%d1_ref(:)=v12-v11
+     lib%residue(icv)%d2_ref(:)=v22-v21
+     !write(0,*)'group coord x',lib%residue(icv)%ref_xyz(1,:)
+     !write(0,*)'group coord y',lib%residue(icv)%ref_xyz(2,:)
+     !write(0,*)'group coord z',lib%residue(icv)%ref_xyz(3,:)
+     !write(0,*)
+     !write(0,*) 'd_ref 1',lib%residue(icv)%d1_ref(:),lib%residue(icv)%dir1_atom_1,lib%residue(icv)%dir1_atom_2
+     !write(0,*) 'd_ref 2',lib%residue(icv)%d2_ref(:),lib%residue(icv)%dir2_atom_1,lib%residue(icv)%dir2_atom_2
+     !write(0,*)
+     if( lib%residue(icv)%has_sym .and. use_sym) then
+        
+     !write(0,*) allocated(lib%residue(icv)%cv_id)
+     !pause
+     	 call direction_vecs_sym(&
+     	 lib%residue(icv)%natom_head,lib%residue(icv)%ref_xyz,lib%residue(icv)%cv_id,lib%residue(icv)%cv,lib%residue(icv)%order)
+
+      else
+     call direction_vecs_ref_inv(lib%residue(icv)%natom_head,lib%residue(icv)%ref_xyz&
+          ,lib%residue(icv)%d1_ref,lib%residue(icv)%d2_ref,lib%residue(icv)%cv)
+     end if
+  end do       
+end do
+ 
+deallocate(block%xyz)
+
+end subroutine
+
+
+
+
+
 
 subroutine test_get_ref_from_frames(lib,topologies,project)
 implicit none
@@ -51,11 +406,11 @@ activ_res(4)  =.false.
 
 !write(0,*)topologies%state(window%istate)%topo%resnames(:)
 	
-do i=1,size(activ_res)
-if(activ_res(i)) then
-	write(0,*)topologies%state(window%istate)%topo%resnames(i),size(activ_res)
-end if
-end do
+!do i=1,size(activ_res)
+!if(activ_res(i)) then
+!	write(0,*)topologies%state(window%istate)%topo%resnames(i),size(activ_res)
+!end if
+!end do
 !pause
 call get_ref_from_frames(1,activ_res,project,topologies,window,window_mask,lib,coords,g_start,g_size)
 call build_statistics(g_start,g_size,coords,mean_u,moment_u)
@@ -91,9 +446,10 @@ type(topology_set_type) :: topologies
 ntstep=window%end_time_step-window%start_time_step+1
 
 
-call get_window_map(window, project, map)
+!call get_window_map(window, project, map)
 !call print_window_map(window, map)
 
+	stop
 call load_raw_data_block( &
     project, &
     window, &
@@ -101,7 +457,7 @@ call load_raw_data_block( &
     block)
 
     nt=count(window_mask)
-    write(0,*) block%istate
+    !write(0,*) block%istate
     
     ncv_all=0
     do i=1,lib%ncv
@@ -112,9 +468,9 @@ call load_raw_data_block( &
    ngroup=0
    ires=0
    do icv=1,lib%ncv
-        write(0,*) 'Residue',lib%residue(icv)%resname
+        !write(0,*) 'Residue',lib%residue(icv)%resname
         do i=1,lib%residue(icv)%freq
-          write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
+          !write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
           nhead=lib%residue(icv)%natom_head
           
           if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
@@ -133,17 +489,17 @@ call load_raw_data_block( &
           
           if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
           ng=ng+1
-          write(0,*) 'Residue',lib%residue(icv)%resname
-          write(0,*) ng
-          write(0,*)  lib%residue(icv)%res_ids
+          !write(0,*) 'Residue',lib%residue(icv)%resname
+          !write(0,*) ng
+          !write(0,*)  lib%residue(icv)%res_ids
           
           end do
           end do
-    pause
+    !pause
     
-    allocate(coords(3,ncoords,nt))
+    !allocate(coords(3,ncoords,nt))
     
-    write(0,*) ncoords, ngroup
+    !write(0,*) ncoords, ngroup
     !pause
     allocate(g_start(ngroup))
     allocate( g_size(ngroup))
@@ -154,13 +510,13 @@ call load_raw_data_block( &
     ng=0	
     na=1
       do icv=1,lib%ncv
-        write(0,*) 'Residue',lib%residue(icv)%resname
+        !!write(0,*) 'Residue',lib%residue(icv)%resname
         do i=1,lib%residue(icv)%freq
          !  write(0,*) 'Residue counting index',i,activ_res(lib%residue(icv)%res_ids(i))
           nhead=lib%residue(icv)%natom_head
           
           if(activ_res(lib%residue(icv)%res_ids(i)) .eqv. .false.) cycle
-          write(0,*) lib%residue(icv)%res_ids(i),count(activ_res)
+          !write(0,*) lib%residue(icv)%res_ids(i),count(activ_res)
           write(0,*)  lib%residue(icv)%res_ids
           ires=lib%residue(icv)%res_ids(i)
           ng=ng+1
@@ -181,8 +537,8 @@ call load_raw_data_block( &
                 !end if	
                 do j=1,lib%residue(icv)%natom_head
                     iatom=lib%residue(icv)%map(j)+topologies%state(window%istate)%topo%acid_start_list(ires)-1
-                    write(0,*) 'natom', iatom,'j',j,'start_list',topologies%state(window%istate)%topo%acid_start_list(ires)&
-                    ,'##########',na,topologies%state(window%istate)%topo%acid_start_list(ires)
+                    !write(0,*) 'natom', iatom,'j',j,'start_list',topologies%state(window%istate)%topo%acid_start_list(ires)&
+                    !,'##########',na,topologies%state(window%istate)%topo%acid_start_list(ires)
                 !write(0,*) topologies%state(window%istate)%topo%acid_start_list
                 coords(:,na,time)=block%xyz(:,iatom,time)
                 na=na+1

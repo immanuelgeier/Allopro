@@ -12,6 +12,89 @@ use domains_module
 
 contains
 
+
+subroutine get_dom_ref(time,irep,istate,idom,lib,topologies,project,block,xyz)
+implicit none
+integer :: istate,irep,time_step,i,j,k,nt,ntstep,time,ido
+type(raw_data_block),intent(in) :: block
+type(project_type), intent(in) :: project
+type(domain_library_type), intent(inout) ::lib
+integer, intent(in) :: idom
+character*4          :: atom_name
+ 
+integer, allocatable :: ref_time_steps(:)
+logical, allocatable :: atom_groups(:)
+logical, allocatable :: activ_dom(:)
+integer :: method
+integer :: icv,iatom,nhead,na,ng,ires,ndom
+real(8), allocatable, intent(out) :: xyz(:,:)
+type(topology_set_type) :: topologies
+
+allocate(xyz(3,lib%domain(idom)%natom_keep))
+
+        
+        do i=1,lib%domain(idom)%natom_keep
+               iatom=lib%domain(idom)%map(i)+lib%domain(idom)%start_atom-1          
+            iatom=lib%domain(idom)%map(i)+lib%domain(idom)%start_atom-1
+           ! write(0,*) iatom
+            xyz(:,i)=block%xyz(:,iatom,time)
+            
+        end do
+    
+end subroutine
+
+
+
+subroutine ref_from_frame_single_domain(time,irep,istate,lib,topologies,project,block)
+implicit none
+integer :: istate,irep,time_step,i,j,k,nt,ntstep,time,ido
+type(time_window):: window
+type(window_map)  :: map
+type(raw_data_block),intent(in) :: block
+type(project_type), intent(in) :: project
+type(domain_library_type), intent(inout) ::lib
+
+character*4          :: atom_name
+logical,allocatable  :: window_mask(:) 
+integer, allocatable :: ref_time_steps(:)
+logical, allocatable :: atom_groups(:)
+logical, allocatable :: activ_dom(:)
+integer :: method
+integer :: icv,iatom,nhead,na,ng,ires,ndom,idom
+real(8),allocatable :: coords(:,:,:),struc(:,:) 
+integer :: ncv_all,ncoords,ngroup
+integer,allocatable :: g_start(:),g_size(:)
+real(8) :: v11(3),v12(3),v21(3),v22(3),d1(3),d2(3)
+type(topology_set_type) :: topologies
+
+
+
+
+        	
+       if(allocated(lib%domain(ido)%ref_xyz)) deallocate(lib%domain(ido)%ref_xyz)	
+        allocate(lib%domain(ido)%ref_xyz(3,lib%domain(ido)%natom_keep))
+       if(allocated(lib%domain(ido)%cv)) deallocate(lib%domain(ido)%cv)
+        allocate(lib%domain(ido)%cv(2,lib%domain(ido)%natom_keep)) 
+        
+        
+        
+        
+        do i=1,lib%domain(ido)%natom_keep
+             
+           
+            iatom=lib%domain(ido)%map(i)+lib%domain(ido)%start_atom-1
+            lib%domain(ido)%ref_xyz(:,i)=block%xyz(:,iatom,1)
+            
+        end do
+        call direction_vecs_ref_inv_gyration&
+        (lib%domain(ido)%natom_keep,lib%domain(ido)%ref_xyz,.true.,d1,d2,lib%domain(ido)%cv)
+
+    
+  
+
+end subroutine
+
+
 subroutine ref_from_frames_domains(time,irep,istate,lib,topologies,project)
 implicit none
 integer :: istate,irep,time_step,i,j,k,nt,ntstep,time,ido
@@ -108,7 +191,7 @@ integer,intent(in) :: n
 real(8),intent(in) :: d1_orig(3),d2_orig(3)
 real(8)            :: d1(3),d2(3)
 real(8),allocatable,intent(in)  :: ref(:,:)
-real(8),allocatable,intent(inout) :: cvec(:,:)
+real(8),allocatable,intent(out) :: cvec(:,:)
 
 real(8) :: cog(3), ri(3)
 real(8) :: c(n), c2(n)
@@ -123,6 +206,9 @@ real(8) :: tmp1(3), tmp2(3)
 
 integer :: info, lwork, i, j
 logical :: use_axes
+
+if(allocated(cvec)) deallocate(cvec)
+allocate(cvec(2,n))
 
 !do i=1,n
 !write(0,*) ref(:,i)
@@ -210,40 +296,13 @@ do i=1,n
 end do
 
 ! ----------------------------------------
-! CENTERING
+! Numerical cleanup
 ! ----------------------------------------
 c  = c  - sum(c)/dble(n)
 c2 = c2 - sum(c2)/dble(n)
 
-! ----------------------------------------
-! RECONSTRUCTION CHECK
-! ----------------------------------------
-v1 = 0.d0
-v2 = 0.d0
 
-do i=1,n
-   ri = ref(:,i) - cog
-   v1 = v1 + c(i)*ri
-   v2 = v2 + c2(i)*ri
-end do
-!
-!write(0,*) 'v1',v1
-!write(0,*) 'v2',v2
-!
-!write(0,*) 'd1',d1
-!write(0,*) 'd2',d2
-!
-!write(0,*)'dot(v1,d1)',dot_product(v1,d1/dot_product(d1,d1))&
-!         ,'dot(v2,d2)',dot_product(v2,d2/dot_product(d2,d2))
-!
-!write(0,*) 'c1',c
-!write(0,*) 'c2',c2
-!
-!pause
-
-! ----------------------------------------
-! OUTPUT
-! ----------------------------------------
+!---------------------------------
 do i=1,n
    cvec(1,i) = c(i)
    cvec(2,i) = c2(i)

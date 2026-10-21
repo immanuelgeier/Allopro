@@ -1,0 +1,17 @@
+CV_plan builder:
+CV_plan laden oder neu erstellen?
+wenn laden: wo und welches file?
+wenn neu erstellen: wie soll der plan heißen?
+wenn neu erstellen: welche gruppen typen?
+(domaine backbone gruppen,vordefiniert standard residuen seitenketten gruppen (funktionelle/sterisch anspruchsvolle gruppen), benutzerdefinierte atom gruppen,gromacs .idx file)
+für alle gruppen in 'benutzerdefiniert': wo und welches file?
+für alle gruppen methode bestimmen wie Zentroidabstandsvektorgewichte gewählt werden soll.
+(benutzerdefiniert Gewichte importieren oder Gewichte für 'Richtungsdeformationsvektoren' von Referenzstruktur und Richtung berechnen)
+wenn benutzerdefiniert Gewichte: wo und welches file?
+wenn Referenzdefinition: welche methode um Referenz richtung zu definieren (atompaar, gyration, benutzerdefinierter import)
+wenn importien: wo und welches file?
+wenn Referenzdefinition: Referenzstruktur von Trajectorien oder importieren?
+wenn importien: wo und welches file?
+wenn von Trajectorie: von benutzer definiertem frame oder vordefinierte optimierungs methode?
+wenn benutzerdefiniert frame: welcher State, Replikat, Zeitpunkt?
+wenn vordefinierte optimierung: welcher Bereich der trajektorie? welcher score? welche optimierungsmethode?

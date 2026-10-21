@@ -4,28 +4,34 @@ echo "================================"
 echo " TEST SETUP"
 echo "================================"
 
+# Pfad zum Quellcode (Standard: aktuelles Repository)
+SRC_DIR="$(pwd)"
+
 ./install_mdrun.sh << EOF
 2
-/home/pbuser/Schreibtisch/mdgraph/src
+$SRC_DIR
 EOF
 
+echo
+echo "Bitte gib die Pfade zu deinen Testdaten an."
 
-# =========================================
-# CONFIG PROJECT
-# =========================================
+read -e -p "PDB-Datei: " PDB
+read -e -p "Domains-Datei: " DOMAINS
+read -e -p "DCD-Dateien (z.B. /pfad/zu/dcd_*): " DCD
 
-PDB=/home/pbuser/Schreibtisch/MD_simulations/monomer_prod/program_files/protein.pdb
-DOMAINS=/home/pbuser/Schreibtisch/3lnx_domains.txt
-DCD=/media/pbuser/T7/MD_3lnx/dcd_*
+echo
+echo "Projekt wird eingerichtet..."
 
 ./config_project.sh << EOF
 1
-3lnx
+test_project
 $PDB
 $DOMAINS
 $DCD
 EOF
 
+echo
+echo "Testprojekt erfolgreich eingerichtet."
 #make
 
 

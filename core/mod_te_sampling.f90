@@ -1,0 +1,1097 @@
+module healpix_histogram_sampling_execution_module
+
+    use iso_fortran_env, only : int32, int64, real32, real64
+    use sparse_lut_module, only : pair_map_type, hitlist_type, get_lut_index
+    use healpix_state_space_exploration
+    use lifting_plan_module
+    use mod_te_io_reconstruction
+    use te_pair_statistics_module
+    use healpix_histogram_sampling_plan_module
+    
+    implicit none
+    private
+
+    public :: run_te_workflow,run_te_pair,run_calculate_te_matrix_chunked
+
+contains
+
+
+subroutine run_calculate_te_matrix_chunked(odf_lib,lifting_plan)
+type(pair_map_type) :: pair_map
+type(hitlist_type)  :: hits
+
+type(odf_lib_type),      intent(inout) :: odf_lib
+type(lifting_plan_type), intent(in)    :: lifting_plan
+real(real64),allocatable :: te_matrix(:,:)
+integer :: npix,nlevel_target,n_chunks,max_chunk_size,i
+integer(int64) :: n_total
+character(len=800) :: input_prefix
+
+input_prefix='histogram_chunk_lag2_shuffle'
+    nlevel_target  = 3
+    max_chunk_size = 10**8
+    
+call    init_te_mapping( &
+        odf_lib, &
+        nlevel_target, &
+        max_chunk_size, &
+        hits, &
+        pair_map, &
+        npix, &
+        n_total, &
+        n_chunks )
+        
+        write(0,*) 'npix',npix,max_chunk_size
+        
+call    calculate_te_matrix_chunked( &
+    pair_map, hits, npix, input_prefix, n_chunks, te_matrix)
+
+    
+    open(1,file='te_matrix.txt')
+    
+    do i=1,size(te_matrix,1)
+       write(0,*) te_matrix(i,:)
+       write(1,*) te_matrix(i,:)
+    end do
+    
+    close(1)
+    
+end subroutine
+
+
+
+subroutine calculate_te_matrix_chunked( &
+    pair_map, hits, npix, input_prefix, n_chunks, te_matrix)
+
+    use iso_fortran_env, only : real32, real64, int64
+
+    implicit none
+
+    type(pair_map_type), intent(in) :: pair_map
+    type(hitlist_type),  intent(in) :: hits
+
+    integer, intent(in) :: npix
+    integer, intent(in) :: n_chunks
+
+    character(len=*), intent(in) :: input_prefix
+
+    real(real64), allocatable, intent(out) :: te_matrix(:,:)
+
+
+    ! ================================================================
+    ! Lokale Variablen
+    ! ================================================================
+
+    integer :: nobj
+
+    integer :: ichunk
+    integer :: pair_entry
+    integer :: i, j
+
+    integer :: nf, np, nq
+
+    integer :: f, p, q
+    integer :: k
+    integer :: k1, k2, k3
+
+    integer(int64) :: local_idx
+    integer(int64) :: chunk_size
+    integer(int64) :: chunk_pos
+
+    integer :: u_in
+
+    integer :: n_pairs_chunk
+    integer :: n_processed
+
+    character(len=800) :: chunk_file
+
+    real(real32), allocatable :: chunk_data(:)
+
+    real(real64), allocatable :: counts_fp(:,:)
+    real(real64), allocatable :: counts_pq(:,:)
+    real(real64), allocatable :: counts_p(:)
+
+    real(real64) :: total_counts
+
+    real(real64) :: h_fp
+    real(real64) :: h_pq
+    real(real64) :: h_p
+    real(real64) :: h_fpq
+
+    real(real64) :: x
+
+
+    ! ================================================================
+    ! Größe der TE-Matrix
+    ! ================================================================
+
+    nobj = size(hits%hits_present, 2)
+
+    allocate(te_matrix(nobj, nobj))
+
+    te_matrix = 0.0_real64
+
+
+    n_processed = 0
+
+
+    ! ================================================================
+    ! Chunks nacheinander bearbeiten
+    ! ================================================================
+
+    do ichunk = 1, n_chunks
+
+        ! ------------------------------------------------------------
+        ! Anzahl Paare in diesem Chunk bestimmen
+        ! ------------------------------------------------------------
+
+        n_pairs_chunk = 0
+
+        do pair_entry = 1, pair_map%n_active
+
+            i = pair_map%active_i(pair_entry)
+            j = pair_map%active_j(pair_entry)
+
+            if (pair_map%chunk(i,j) == ichunk) then
+                n_pairs_chunk = n_pairs_chunk + 1
+            end if
+
+        end do
+
+        if (n_pairs_chunk == 0) cycle
+
+
+        ! ============================================================
+        ! Größe dieses Chunks bestimmen
+        !
+        ! local_start ist die Position innerhalb des Chunkfiles.
+        ! size ist die Anzahl real32-Werte des Paares.
+        ! ============================================================
+
+        chunk_size = 0_int64
+
+        do pair_entry = 1, pair_map%n_active
+
+            i = pair_map%active_i(pair_entry)
+            j = pair_map%active_j(pair_entry)
+
+            if (pair_map%chunk(i,j) /= ichunk) cycle
+
+            chunk_size = max( &
+                chunk_size, &
+                int(pair_map%local_start(i,j),int64) + &
+                int(pair_map%size(i,j),int64) - 1_int64)
+
+        end do
+
+
+        ! ------------------------------------------------------------
+        ! Chunk vollständig laden
+        ! ------------------------------------------------------------
+
+        allocate(chunk_data(chunk_size))
+
+       ! call make_te_chunk_filename( &
+       !     input_prefix, ichunk, chunk_file)
+            
+       call make_shuffle_te_chunk_filename(input_prefix, &
+                                          1, ichunk, chunk_file)
+
+
+        open(newunit=u_in, &
+             file=trim(chunk_file), &
+             access='stream', &
+             form='unformatted', &
+             status='old', &
+             action='read')
+
+        read(u_in) chunk_data
+
+        close(u_in)
+
+
+        ! ============================================================
+        ! Alle Paare dieses Chunks bearbeiten
+        ! ============================================================
+
+        do pair_entry = 1, pair_map%n_active
+
+            i = pair_map%active_i(pair_entry)
+            j = pair_map%active_j(pair_entry)
+
+            if (pair_map%chunk(i,j) /= ichunk) cycle
+
+
+            ! --------------------------------------------------------
+            ! Supportgrößen dieses Paares
+            ! --------------------------------------------------------
+
+            nf = hits%n_lagged(i)
+            np = hits%n_present(i)
+            nq = hits%n_present(j)
+
+            if (nf <= 0 .or. np <= 0 .or. nq <= 0) cycle
+
+
+            ! --------------------------------------------------------
+            ! Konsistenzprüfung
+            ! --------------------------------------------------------
+
+            if (int(pair_map%size(i,j),int64) /= &
+                int(nf,int64) * int(np,int64) * int(nq,int64)) then
+
+                write(0,*) 'ERROR: pair_map%size mismatch'
+                write(0,*) 'pair = ', i, j
+                write(0,*) 'size = ', pair_map%size(i,j)
+                write(0,*) 'expected = ', &
+                    int(nf,int64) * int(np,int64) * int(nq,int64)
+
+                error stop
+
+            end if
+
+
+            ! ========================================================
+            ! Marginalverteilungen
+            ! ========================================================
+
+            allocate(counts_fp(nf,np))
+            allocate(counts_pq(np,nq))
+            allocate(counts_p(np))
+
+            counts_fp = 0.0_real64
+            counts_pq = 0.0_real64
+            counts_p  = 0.0_real64
+
+            total_counts = 0.0_real64
+
+
+            ! ========================================================
+            ! 1. Durchlauf:
+            !
+            ! N(f,p)
+            ! N(p,q)
+            ! N(p)
+            !
+            ! ========================================================
+
+            do local_idx = 1_int64, &
+                           int(pair_map%size(i,j),int64)
+
+                chunk_pos = &
+                    int(pair_map%local_start(i,j),int64) + &
+                    local_idx - 1_int64
+
+                x = real(chunk_data(chunk_pos), real64)
+
+                if (x <= 0.0_real64) cycle
+
+
+                ! ----------------------------------------------------
+                ! local_idx -> Support-Ränge
+                ! ----------------------------------------------------
+
+                k = int(local_idx - 1_int64)
+
+                k1 = mod(k,nf) + 1
+
+                k2 = mod(k / nf,np) + 1
+
+                k3 = k / (nf*np) + 1
+
+
+                ! ----------------------------------------------------
+                ! Marginalisierung
+                ! ----------------------------------------------------
+
+                counts_fp(k1,k2) = &
+                    counts_fp(k1,k2) + x
+
+                counts_pq(k2,k3) = &
+                    counts_pq(k2,k3) + x
+
+                counts_p(k2) = &
+                    counts_p(k2) + x
+                total_counts = total_counts + x
+            end do
+            ! ========================================================
+            ! Entropien
+            ! ========================================================
+            if (total_counts > 0.0_real64) then
+                h_fp  = 0.0_real64
+                h_pq  = 0.0_real64
+                h_p   = 0.0_real64
+                h_fpq = 0.0_real64
+                ! ----------------------------------------------------
+                ! H(f,p)
+                ! ----------------------------------------------------
+                do f = 1, nf
+                    do p = 1, np
+                        x = counts_fp(f,p) / total_counts
+                        if (x > 0.0_real64) then
+                            h_fp = h_fp - x * log(x)
+                        end if
+                    end do
+                end do
+                ! ----------------------------------------------------
+                ! H(p,q)
+                ! ----------------------------------------------------
+                do p = 1, np
+                    do q = 1, nq
+                        x = counts_pq(p,q) / total_counts
+                        if (x > 0.0_real64) then
+                            h_pq = h_pq - x * log(x)
+                        end if
+                    end do
+                end do
+                ! ----------------------------------------------------
+                ! H(p)
+                ! ----------------------------------------------------
+                do p = 1, np
+                    x = counts_p(p) / total_counts
+                    if (x > 0.0_real64) then
+                        h_p = h_p - x * log(x)
+                    end if
+                end do
+                ! ----------------------------------------------------
+                ! H(f,p,q)
+                !
+                ! Direkt aus den Original-Counts.
+                ! ----------------------------------------------------
+                do local_idx = 1_int64, &
+                               int(pair_map%size(i,j),int64)
+                    chunk_pos = &
+                        int(pair_map%local_start(i,j),int64) + &
+                        local_idx - 1_int64
+                    x = real(chunk_data(chunk_pos), real64)
+                    if (x <= 0.0_real64) cycle
+                    x = x / total_counts
+                    h_fpq = h_fpq - x * log(x)
+                end do
+                ! ----------------------------------------------------
+                ! TE(q -> f | p)
+                !
+                ! H(f,p) + H(p,q) - H(p) - H(f,p,q)
+                ! ----------------------------------------------------
+                te_matrix(i,j) = &
+                    h_fp + h_pq - h_p - h_fpq
+            else
+                te_matrix(i,j) = 0.0_real64
+            end if
+            
+            deallocate(counts_fp)
+            deallocate(counts_pq)
+            deallocate(counts_p)
+
+            n_processed = n_processed + 1
+
+        end do
+
+
+        ! ============================================================
+        ! Chunk freigeben
+        ! ============================================================
+
+        deallocate(chunk_data)
+
+
+        write(0,'(A,I0,A,I0,A,F7.2,A,I0)') &
+            'TE: chunk ', ichunk, &
+            ' / ', n_chunks, &
+            '  (', &
+            100.0_real64 * real(ichunk,real64) / &
+            real(n_chunks,real64), &
+            '%), pairs processed = ', n_processed
+
+    end do
+
+
+    write(0,'(A,I0,A,I0)') &
+        'TE matrix complete: ', n_processed, &
+        ' / ', pair_map%n_active
+
+
+end subroutine calculate_te_matrix_chunked
+
+
+subroutine run_te_pair(odf_lib, lifting_plan, i, j,found)
+
+    use iso_fortran_env, only : int32, int64, real32, real64
+
+    implicit none
+
+    type(odf_lib_type),      intent(inout) :: odf_lib
+    type(lifting_plan_type), intent(in)    :: lifting_plan
+
+    integer(int32), intent(in)  :: i, j
+    logical,intent(out)    :: found
+
+
+    !=====================================================================
+    ! Lokale Daten
+    !=====================================================================
+
+    type(hitlist_type)  :: hits
+    type(pair_map_type) :: pair_map
+
+    type(te_pair_statistics_type) :: stats
+
+    integer            :: nlevel_target
+    integer            :: npix
+    integer            :: n_chunks
+    integer            :: lag
+
+    integer(int32)     :: max_chunk_size
+
+    integer(int64)     :: n_total
+
+    character(len=800) :: output_prefix
+    character(len=800) :: filename
+
+    real(real32), allocatable :: hist_3d(:,:,:)
+    real(real32), allocatable :: hist_3d_reduced(:,:,:)
+
+    integer, allocatable :: red_idx1(:)
+    integer, allocatable :: red_idx2(:)
+    integer, allocatable :: red_idx3(:)
+
+    integer :: nred1
+    integer :: nred2
+    integer :: nred3
+
+    integer :: unit
+    logical :: do_spectrum
+
+
+    !=====================================================================
+    ! Einstellungen
+    !=====================================================================
+
+    nlevel_target  = 3
+    max_chunk_size = 10**8
+    lag            = 1
+
+    output_prefix = 'histogram_chunk'
+
+    do_spectrum = .true.
+
+
+    !=====================================================================
+    ! 1. Mapping initialisieren
+    !=====================================================================
+
+    call init_te_mapping( &
+        odf_lib, &
+        nlevel_target, &
+        max_chunk_size, &
+        hits, &
+        pair_map, &
+        npix, &
+        n_total, &
+        n_chunks )
+
+
+    !=====================================================================
+    ! 2. Histogramm dieses einen Paares laden
+    !
+    ! Achsen:
+    !
+    !   hist(future,present,past/source-present)
+    !=====================================================================
+
+    call read_pair_histogram( &
+        output_prefix, &
+        pair_map, &
+        hits, &
+        npix, &
+        i, &
+        j, &
+        hist_3d, &
+        hist_3d_reduced, &
+        red_idx1, &
+        red_idx2, &
+        red_idx3, &
+        nred1, &
+        nred2, &
+        nred3, &
+        found )
+
+
+    !=====================================================================
+    ! Paar existiert nicht
+    !=====================================================================
+
+    if (.not. found) then
+
+        write(0,*) 'TE pair (', i, ',', j, ') not found.'
+
+        return
+
+    end if
+
+
+    !=====================================================================
+    ! Kontrolle
+    !=====================================================================
+
+    write(0,*)
+    write(0,*) '============================================'
+    write(0,*) 'TE pair statistics'
+    write(0,*) 'pair = ', i, j
+    write(0,*) '============================================'
+
+    write(0,*) 'full histogram dimensions    = ', &
+        size(hist_3d,1), &
+        size(hist_3d,2), &
+        size(hist_3d,3)
+
+    write(0,*) 'reduced histogram dimensions = ', &
+        nred1, nred2, nred3
+
+    write(0,*) 'total counts                 = ', &
+        sum(hist_3d)
+
+
+    !=====================================================================
+    ! 3. Alle statistischen Größen berechnen
+    !=====================================================================
+
+    call calculate_te_pair_statistics( &
+        hist_3d_reduced, &
+        red_idx1, &
+        red_idx2, &
+        red_idx3, &
+        stats )
+
+
+    !=====================================================================
+    ! 4. Spektrale Eigenschaften des Markov-Kernels
+    !=====================================================================
+
+    if (do_spectrum) then
+
+        call calculate_markov_spectrum( &
+            stats, &
+            real(lag,real64) )
+
+    end if
+
+
+    !=====================================================================
+    ! 5. Ergebnisse auf Bildschirm ausgeben
+    !=====================================================================
+
+    write(0,*)
+    write(0,*) '----- Entropien -----'
+
+    write(0,*) 'H(f)       = ', stats%entropy_f
+    write(0,*) 'H(p)       = ', stats%entropy_p
+    write(0,*) 'H(q)       = ', stats%entropy_q
+
+    write(0,*) 'H(f,p)     = ', stats%entropy_fp
+    write(0,*) 'H(f,q)     = ', stats%entropy_fq
+    write(0,*) 'H(p,q)     = ', stats%entropy_pq
+    write(0,*) 'H(f,p,q)   = ', stats%entropy_fpq
+
+
+    write(0,*)
+    write(0,*) '----- Bedingte Entropien -----'
+
+    write(0,*) 'H(f|p)     = ', &
+        stats%conditional_entropy_f_given_p
+
+    write(0,*) 'H(f|q)     = ', &
+        stats%conditional_entropy_f_given_q
+
+    write(0,*) 'H(p|q)     = ', &
+        stats%conditional_entropy_p_given_q
+
+    write(0,*) 'H(f|p,q)   = ', &
+        stats%conditional_entropy_f_given_pq
+
+
+    write(0,*)
+    write(0,*) '----- Mutual Information -----'
+
+    write(0,*) 'I(f;p)     = ', &
+        stats%mutual_information_fp
+
+    write(0,*) 'I(f;q)     = ', &
+        stats%mutual_information_fq
+
+    write(0,*) 'I(p;q)     = ', &
+        stats%mutual_information_pq
+
+
+    write(0,*)
+    write(0,*) '----- Transfer Entropy -----'
+
+    write(0,*) 'TE(q -> f|p) = ', &
+        stats%transfer_entropy
+
+
+    write(0,*)
+    write(0,*) '----- Markov-Kernel -----'
+
+    write(0,*) 'kernel dimensions = ', &
+        size(stats%markov_k,1), &
+        size(stats%markov_k,2)
+
+
+    !=====================================================================
+    ! 6. Markov-Kernel speichern
+    !
+    ! K(f|p)
+    !=====================================================================
+
+    write(filename,'("te_markov_",I0,"_",I0,".dat")') i, j
+
+    open(newunit=unit, &
+         file=trim(filename), &
+         status='replace', &
+         action='write')
+
+    write(unit,'(2(I0,1X))') &
+        size(stats%markov_k,1), &
+        size(stats%markov_k,2)
+
+    do nred1 = 1, size(stats%markov_k,1)
+
+        write(unit,'(*(ES24.16,1X))') &
+            stats%markov_k(nred1,:)
+
+    end do
+
+    close(unit)
+
+
+    !=====================================================================
+    ! 7. Korrelationsmatrix speichern
+    !=====================================================================
+
+    write(filename,'("te_correlation_",I0,"_",I0,".dat")') i, j
+
+    open(newunit=unit, &
+         file=trim(filename), &
+         status='replace', &
+         action='write')
+
+    write(unit,'(2(I0,1X))') &
+        size(stats%correlation_fp,1), &
+        size(stats%correlation_fp,2)
+
+    do nred1 = 1, size(stats%correlation_fp,1)
+
+        write(unit,'(*(ES24.16,1X))') &
+            stats%correlation_fp(nred1,:)
+
+    end do
+
+    close(unit)
+
+
+    !=====================================================================
+    ! 8. Alle skalaren Einzelwerte mit Bedeutung speichern
+    !
+    ! Eine Datei pro Paar:
+    !
+    !   te_pair_i_j_values.dat
+    !
+    ! Format:
+    !
+    !   name = value
+    !
+    !=====================================================================
+
+    write(filename,'("te_pair_",I0,"_",I0,"_values.dat")') i, j
+
+    open(newunit=unit, &
+         file=trim(filename), &
+         status='replace', &
+         action='write')
+
+
+    write(unit,'(A)') '# TE pair statistics'
+    write(unit,'(A,I0)') '# future/source pair i = ', i
+    write(unit,'(A,I0)') '# future/source pair j = ', j
+    write(unit,'(A)') '# Histogram axes: (future,present,source-present)'
+    write(unit,'(A)') '#'
+
+
+    !---------------------------------------------------------------------
+    ! Histogramm / Zustandsraum
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,I0)') &
+        'n_counts = ', int(sum(hist_3d),int64)
+
+    write(unit,'(A,I0)') &
+        'full_n_future = ', size(hist_3d,1)
+
+    write(unit,'(A,I0)') &
+        'full_n_present = ', size(hist_3d,2)
+
+    write(unit,'(A,I0)') &
+        'full_n_source_present = ', size(hist_3d,3)
+
+    write(unit,'(A,I0)') &
+        'reduced_n_future = ', nred1
+
+    write(unit,'(A,I0)') &
+        'reduced_n_present = ', nred2
+
+    write(unit,'(A,I0)') &
+        'reduced_n_source_present = ', nred3
+
+
+    !---------------------------------------------------------------------
+    ! Entropien
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'H_future = ', stats%entropy_f
+
+    write(unit,'(A,ES24.16)') &
+        'H_present = ', stats%entropy_p
+
+    write(unit,'(A,ES24.16)') &
+        'H_source_present = ', stats%entropy_q
+
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_present = ', stats%entropy_fp
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_source_present = ', stats%entropy_fq
+
+    write(unit,'(A,ES24.16)') &
+        'H_present_source_present = ', stats%entropy_pq
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_present_source_present = ', stats%entropy_fpq
+
+
+    !---------------------------------------------------------------------
+    ! Bedingte Entropien
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_given_present = ', &
+        stats%conditional_entropy_f_given_p
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_given_source_present = ', &
+        stats%conditional_entropy_f_given_q
+
+    write(unit,'(A,ES24.16)') &
+        'H_present_given_source_present = ', &
+        stats%conditional_entropy_p_given_q
+
+    write(unit,'(A,ES24.16)') &
+        'H_future_given_present_source_present = ', &
+        stats%conditional_entropy_f_given_pq
+
+
+    !---------------------------------------------------------------------
+    ! Mutual Information
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'I_future_present = ', &
+        stats%mutual_information_fp
+
+    write(unit,'(A,ES24.16)') &
+        'I_future_source_present = ', &
+        stats%mutual_information_fq
+
+    write(unit,'(A,ES24.16)') &
+        'I_present_source_present = ', &
+        stats%mutual_information_pq
+
+
+    !---------------------------------------------------------------------
+    ! Transfer Entropy
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'TE_source_to_future_given_present = ', &
+        stats%transfer_entropy
+
+
+    !---------------------------------------------------------------------
+    ! Effektive Anzahl von Zuständen
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_future = ', &
+        stats%effective_states_f
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_present = ', &
+        stats%effective_states_p
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_source_present = ', &
+        stats%effective_states_q
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_future_present = ', &
+        stats%effective_states_fp
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_future_source_present = ', &
+        stats%effective_states_fq
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_present_source_present = ', &
+        stats%effective_states_pq
+
+    write(unit,'(A,ES24.16)') &
+        'N_eff_future_present_source_present = ', &
+        stats%effective_states_fpq
+
+
+    !---------------------------------------------------------------------
+    ! Spektrale Eigenschaften
+    !---------------------------------------------------------------------
+
+    write(unit,'(A,ES24.16)') &
+        'spectral_gap = ', &
+        stats%spectral_gap
+
+    write(unit,'(A,ES24.16)') &
+        'relaxation_time = ', &
+        stats%relaxation_time
+
+    write(unit,'(A,ES24.16)') &
+        'entropy_rate = ', &
+        stats%entropy_rate
+
+    write(unit,'(A,ES24.16)') &
+        'detailed_balance_error = ', &
+        stats%detailed_balance_error
+
+    write(unit,'(A,ES24.16)') &
+        'entropy_production = ', &
+        stats%entropy_production
+
+
+    close(unit)
+
+
+    !=====================================================================
+    ! 9. Summary-Datei
+    !
+    ! Eine Zeile pro Paar für spätere Python-Auswertung.
+    !=====================================================================
+
+    !call save_te_pair_summary( &
+    !    'te_summary.dat', &
+    !    i, &
+    !    j, &
+    !    stats )
+
+
+    !=====================================================================
+    ! 10. Speicher freigeben
+    !=====================================================================
+
+    call clear_te_pair_statistics(stats)
+
+    deallocate(hist_3d)
+    deallocate(hist_3d_reduced)
+
+    deallocate(red_idx1)
+    deallocate(red_idx2)
+    deallocate(red_idx3)
+
+
+    found = .true.
+
+
+end subroutine run_te_pair
+
+
+
+subroutine run_te_workflow(odf_lib, lifting_plan,lag)
+    implicit none
+
+    type(odf_lib_type),       intent(inout) :: odf_lib
+    type(lifting_plan_type),  intent(in)    :: lifting_plan
+    type(hitlist_type)                      :: hits
+    type(pair_map_type)                     :: pair_map
+    
+    integer, intent(in):: lag
+    integer            :: nlevel_target, npix, n_chunks
+    integer(int32)     :: max_chunk_size,i,j
+    integer(int64)     :: n_total
+    character(len=800) :: output_prefix
+    real(real32), allocatable :: hist_3d(:,:,:),hist_3d_reduced(:,:,:)
+    real(real32), allocatable :: markov_k(:,:),rho_log_rho(:,:),rho_i(:),rho_j(:),corr(:,:)
+    logical:: found
+    integer::  nred1, nred2, nred3
+    integer, allocatable :: red_idx1(:), red_idx2(:), red_idx3(:)
+    real(int64):: n_counts
+    real(int64)   :: in_counts
+    type(sampling_plan_type) :: plan!_healpix_lifting
+    nlevel_target  = 3
+    max_chunk_size = 10**8  ! Reicht völlig & schont Speicher!
+    !lag            = 1
+    output_prefix  = 'te_run_shuffel'
+    !integer::shuffle_block_size
+
+    ! 1. Mapping-Typen initialisieren
+    call init_te_mapping( &
+            odf_lib, nlevel_target, max_chunk_size, &
+            hits, pair_map, npix, n_total, n_chunks )
+
+
+    ! ... weitere Initialisierungen (pair_map, hits, lifting_plan ...)
+
+    ! Phase 1: Vektoren in HEALPix heben (Wird nur 1x ausgeführt, Ergebnisse landen komprimiert auf Platte)
+    !call lift_trajectories(lifting_plan, '/media/pbuser/T7/big_histogramms/lifted_tra', 'lifted_healpix_tra_lag2_mem', npix, lag)
+
+    ! Phase 2: Plan erstellen mit exakt 16.0 GB RAM-Limit
+    call create_sampling_plan(plan, pair_map, n_chunks, max_ram_gb=8.0_8)
+
+    ! Phase 3: Plan ausführen (Trajektorien werden nur n_groups-mal gelesen, z.B. 6x statt 100x!)
+    !call execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
+    !                           npix, lag, 'lifted_healpix_tra_lag2_mem', 'histogram_chunk_lag2')
+    call execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
+                                          npix, lag, 10000, &
+                                          1, '/media/pbuser/T7/big_histogramms/lifted_healpix_tra_lag2_mem'&
+                                          , 'histogram_chunk_lag2_shuffle')
+                                          
+                                          
+    ! Speicher aufräumen
+    call free_sampling_plan(plan)
+        
+end subroutine run_te_workflow
+
+subroutine init_te_mapping(odf_lib, nlevel_target, max_chunk_size, hits, pair_map, npix, n_total, n_chunks)
+
+    use iso_fortran_env, only : int32, int64
+    use sparse_lut_module, only : hitlist_type, pair_map_type, &
+                                  make_hitlist, compute_hit_counts, build_pair_map_odf
+
+    implicit none
+
+    ! Inputs
+    type(odf_lib_type), intent(inout) :: odf_lib
+    integer,            intent(in)    :: nlevel_target
+    integer(int32),     intent(in)    :: max_chunk_size
+
+    ! Outputs
+    type(hitlist_type),  intent(out)   :: hits
+    type(pair_map_type), intent(out)   :: pair_map
+    integer,             intent(out)   :: npix
+    integer(int64),      intent(out)   :: n_total
+    integer,             intent(out)   :: n_chunks
+
+    ! Lokale Variablen
+    integer :: nobj, i, j, idx_pair, n_pairs
+    real(8) :: t_start, t_end
+
+    write(0,*) '====================================================='
+    write(0,*) 'Initializing TE Mapping structures (hits & pair_map)'
+    write(0,*) '====================================================='
+    call read_odf_lib(odf_lib)
+    ! ---------------------------------------------------------------
+    ! 1. Parameter aus ODF-Library ableiten
+    ! ---------------------------------------------------------------
+    nobj = size(odf_lib%odf(1)%hist, 2)
+    write(0,*) 'nobj',nobj
+    pause
+    npix = 2**(nlevel_target - 1)
+    npix = 12 * npix * npix
+
+    ! ---------------------------------------------------------------
+    ! KORREKTUR: All-to-All Paare (nobj * nobj) initialisieren!
+    ! ---------------------------------------------------------------
+    n_pairs = nobj * nobj
+    pair_map%n_active = n_pairs
+
+    if (allocated(pair_map%active_i)) deallocate(pair_map%active_i)
+    if (allocated(pair_map%active_j)) deallocate(pair_map%active_j)
+
+    allocate(pair_map%active_i(n_pairs))
+    allocate(pair_map%active_j(n_pairs))
+
+    idx_pair = 0
+    do i = 1, nobj
+        do j = 1, nobj
+            idx_pair = idx_pair + 1
+            pair_map%active_i(idx_pair) = i
+            pair_map%active_j(idx_pair) = j
+        end do
+    end do
+
+    do i=1,idx_pair
+    if(pair_map%active_i(idx_pair) >nobj .or. pair_map%active_i(idx_pair) > nobj) then
+         write(0,*)pair_map%active_i(idx_pair),pair_map%active_j(idx_pair)
+    end if
+    end do
+    pause
+    
+    write(0,*) 'nobj          = ', nobj
+    write(0,*) 'n_pairs       = ', n_pairs
+    write(0,*) 'nlevel target = ', nlevel_target
+    write(0,*) 'npix          = ', npix
+
+    ! ---------------------------------------------------------------
+    ! 2. Hitlists aufbauen & Vorkompilieren
+    ! ---------------------------------------------------------------
+    write(0,*) 'Building hitlists & computing hit counts...'
+    call make_hitlist(hits, odf_lib, nlevel_target)
+    call compute_hit_counts(hits, nobj)
+
+    write(0,*) '  -> Total present hits = ', count(hits%hits_present)
+    write(0,*) '  -> Total lagged hits  = ', count(hits%hits_lagged)
+
+    ! ---------------------------------------------------------------
+    ! 3. Pair Map & Chunking berechnen
+    ! ---------------------------------------------------------------
+    write(0,*) 'Building pair map LUT chunks...'
+    call cpu_time(t_start)
+
+    call build_pair_map_odf( &
+            pair_map, nobj, npix, hits, &
+            max_chunk_size, n_total, n_chunks )
+
+    call cpu_time(t_end)
+
+    ! ---------------------------------------------------------------
+    ! 4. Validierung prüfen
+    ! ---------------------------------------------------------------
+    if (pair_map%start(1,1) < 0_int64 .or. n_total < 0_int64) then
+        write(0,*) 'FEHLER in init_te_mapping: Ungültige Start-Indizes oder n_total < 0!'
+        stop
+    endif
+
+    write(0,*) '-----------------------------------------------------'
+    write(0,*) 'Mapping initialization successful:'
+    write(0,*) '  Time taken = ', t_end - t_start, ' seconds'
+    write(0,*) '  n_total    = ', n_total
+    write(0,*) '  n_chunks   = ', n_chunks
+    write(0,*) '====================================================='
+
+end subroutine init_te_mapping
+
+
+
+
+   !subroutine make_te_chunk_filename(prefix, ichunk, filename)
+   !    character(len=*), intent(in)  :: prefix
+   !    integer,          intent(in)  :: ichunk
+   !    character(len=*), intent(out) :: filename
+   !    write(filename, '(A, "_te_hist_chunk_", I4.4, ".real4.bin")') trim(prefix), ichunk
+   !end subroutine make_te_chunk_filename
+   !
+
+    pure function npix_to_nside(npix) result(nside)
+        integer, intent(in) :: npix
+        integer             :: nside
+        nside = int(sqrt(real(npix / 12, real64)))
+    end function npix_to_nside
+
+end module healpix_histogram_sampling_execution_module

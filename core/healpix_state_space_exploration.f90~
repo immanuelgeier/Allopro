@@ -1,0 +1,2088 @@
+module healpix_state_space_exploration
+
+use direction_vectors_analyse_plan_module
+use lifting_plan_module
+use lifting_plan_execution_module
+use position_lift_module
+use lifted_trajectory_io_module
+use healpix_types
+use pix_tools
+use odf_analysis_module
+    
+implicit none
+
+type :: rare_event_type
+    real(8) :: angle = 0.d0
+
+    integer :: istate = 0
+    integer :: irep   = 0
+    integer :: iblock = 0
+
+    integer :: frame = 0
+    integer :: frame_lag = 0
+
+    integer :: timestep = 0
+    integer :: timestep_lag = 0
+
+    integer :: object = 0
+    integer :: iodf = 0
+
+    integer :: pixel = -1
+end type rare_event_type
+
+
+type :: odf_level_analysis_type
+
+    ! HEALPix-Level
+    integer :: level = 0
+    integer :: nside = 0
+    integer :: npix  = 0
+
+    ! Informationsmaße
+    real(8) :: entropy = 0.0d0
+
+    ! lokale Maxima
+    integer :: nmax = 0
+    integer, allocatable :: maxima_pix(:)
+    integer, allocatable :: maxima_value(:)
+
+    ! Einzugsgebiete (Basins)
+    integer :: nbasin = 0
+    integer, allocatable :: basin_pix(:)
+    integer, allocatable :: basin_counts(:)
+
+end type odf_level_analysis_type
+
+
+type :: odf_type
+
+    ! Identifikation
+    character(len=2048) :: odf_name
+
+    integer :: state       = 0
+    integer :: lag         = 0
+    integer :: basis_index = 0
+
+    ! HEALPix-Auflösung des ursprünglichen Histogramms
+    integer :: nside = 0
+    integer :: npix  = 0
+
+    ! Histogramm auf feinster Auflösung
+    ! Dimensionen: (npix,nobj)
+    integer, allocatable :: hist(:,:)
+    
+
+    ! Analyse für jedes Objekt und jeden HEALPix-Level
+    ! analysis(iobj,ilevel)
+    type(odf_level_analysis_type), allocatable :: analysis(:,:)
+    
+end type odf_type
+
+
+type :: odf_lib_type
+
+    type(odf_type), allocatable :: odf(:)
+
+    logical, allocatable :: c2_symmetry(:)
+
+    integer :: n_odf   
+    integer :: max_lag 
+    integer :: nlevel  
+    
+    real(8), allocatable :: entropy(:,:,:)
+
+end type odf_lib_type
+
+contains
+
+
+
+subroutine read_odf_lib(odf_lib)
+
+    implicit none
+
+    type(odf_lib_type), intent(inout) :: odf_lib
+
+    integer :: iodf
+    integer :: ipix
+    integer :: iobj
+    integer :: unit
+    integer :: ios
+
+    integer :: nside_file
+    integer :: npix_file
+    integer :: nobj_file
+
+    character(len=256) :: filename
+    character(len=256) :: line
+
+    character(len=32) :: dummy1
+    character(len=32) :: dummy2
+
+
+    !=========================================================
+    ! Alle ODFs einlesen
+    !=========================================================
+
+    do iodf = 1, odf_lib%n_odf
+
+        filename = trim(odf_lib%odf(iodf)%odf_name)//".txt"
+
+        write(0,*) 'Reading ODF: ', trim(filename)
+
+
+        !-----------------------------------------------------
+        ! Datei öffnen
+        !-----------------------------------------------------
+
+        open(newunit=unit, &
+             file=trim(filename), &
+             status='old', &
+             action='read', &
+             iostat=ios)
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR: could not open ODF file: ', &
+                       trim(filename)
+
+            stop
+
+        end if
+
+
+        !=====================================================
+        ! Header
+        !=====================================================
+
+        !-----------------------------------------------------
+        ! # nside <value>
+        !-----------------------------------------------------
+
+        read(unit,'(A)',iostat=ios) line
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR reading nside header'
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        read(line,*,iostat=ios) dummy1, dummy2, nside_file
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR parsing nside header'
+            write(0,*) '  line = ',trim(line)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        !-----------------------------------------------------
+        ! # npix <value>
+        !-----------------------------------------------------
+
+        read(unit,'(A)',iostat=ios) line
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR reading npix header'
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        read(line,*,iostat=ios) dummy1, dummy2, npix_file
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR parsing npix header'
+            write(0,*) '  line = ',trim(line)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        !-----------------------------------------------------
+        ! # nobj <value>
+        !-----------------------------------------------------
+
+        read(unit,'(A)',iostat=ios) line
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR reading nobj header'
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        read(line,*,iostat=ios) dummy1, dummy2, nobj_file
+
+        if (ios /= 0) then
+
+            write(0,*) 'ERROR parsing nobj header'
+            write(0,*) '  line = ',trim(line)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        !=====================================================
+        ! Konsistenzchecks
+        !=====================================================
+
+        if (nside_file /= odf_lib%odf(iodf)%nside) then
+
+            write(0,*) 'ERROR: nside mismatch'
+            write(0,*) '  file = ',nside_file
+            write(0,*) '  ODF  = ',odf_lib%odf(iodf)%nside
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        if (npix_file /= odf_lib%odf(iodf)%npix) then
+
+            write(0,*) 'ERROR: npix mismatch'
+            write(0,*) '  file = ',npix_file
+            write(0,*) '  ODF  = ',odf_lib%odf(iodf)%npix
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        if (nobj_file /= size(odf_lib%odf(iodf)%hist,2)) then
+
+            write(0,*) 'ERROR: nobj mismatch'
+            write(0,*) '  file = ',nobj_file
+            write(0,*) '  ODF  = ', &
+                       size(odf_lib%odf(iodf)%hist,2)
+            write(0,*) '  file = ',trim(filename)
+
+            close(unit)
+            stop
+
+        end if
+
+
+        !=====================================================
+        ! Histogramm
+        !
+        ! Die vorhandene Schreib-Routine hat:
+        !
+        !   ipix = 1 ... npix
+        !
+        ! geschrieben.
+        !
+        ! Die interne Struktur ist:
+        !
+        !   hist(0:npix-1,nobj)
+        !
+        ! Daher:
+        !
+        !   erste Datei-Zeile  -> hist(0,:)
+        !   letzte Datei-Zeile -> hist(npix-1,:)
+        !=====================================================
+
+        do ipix = 1, npix_file
+
+            read(unit,*,iostat=ios) &
+                (odf_lib%odf(iodf)%hist(ipix,iobj), &
+                 iobj=1,nobj_file)
+
+            if (ios /= 0) then
+
+                write(0,*) 'ERROR reading histogram'
+                write(0,*) '  file  = ',trim(filename)
+                write(0,*) '  line  = ',ipix
+                write(0,*) '  pixel = ',ipix
+
+                close(unit)
+                stop
+
+            end if
+
+        end do
+
+
+        close(unit)
+
+
+        !=====================================================
+        ! Kontrolle
+        !=====================================================
+
+        write(0,*) '  nside  = ',odf_lib%odf(iodf)%nside
+        write(0,*) '  npix   = ',odf_lib%odf(iodf)%npix
+        write(0,*) '  nobj   = ',nobj_file
+        write(0,*) '  counts = ',sum(odf_lib%odf(iodf)%hist)
+
+    end do
+
+
+    write(0,*) 'All ODFs successfully loaded.'
+
+
+end subroutine read_odf_lib
+
+
+
+
+subroutine write_odf_analysis_text(odf_lib)
+    implicit none
+
+    type(odf_lib_type), intent(in) :: odf_lib
+
+    integer :: iodf, iobj, ilevel, i
+    integer :: unit, nobj
+    character(len=256) :: filename
+
+    do iodf = 1, odf_lib%n_odf
+        if (.not. allocated(odf_lib%odf(iodf)%analysis)) cycle
+
+        ! Dateiname z. B. "state_0001_lag_000_analysis.txt"
+        filename = trim(odf_lib%odf(iodf)%odf_name) // "_analysis.txt"
+
+        open(newunit=unit, file=trim(filename), status="replace", action="write")
+
+        nobj = size(odf_lib%odf(iodf)%analysis, 1)
+
+        write(unit, '(A)') "# ========================================================"
+        write(unit, '(A, A)') "# ODF Analysis Data for: ", trim(odf_lib%odf(iodf)%odf_name)
+        write(unit, '(A, I8)') "# State: ", odf_lib%odf(iodf)%state
+        write(unit, '(A, I8)') "# Lag:   ", odf_lib%odf(iodf)%lag
+        write(unit, '(A, I8)') "# Nobj:  ", nobj
+        write(unit, '(A, I8)') "# Nlevel:", odf_lib%nlevel
+        write(unit, '(A)') "# ========================================================"
+
+        do iobj = 1, nobj
+            do ilevel = 1, odf_lib%nlevel
+                associate(an => odf_lib%odf(iodf)%analysis(iobj, ilevel))
+
+                    write(unit, '(A, I6, A, I3, A, I3, A, I6, A, I6, A, ES18.10)') &
+                        "OBJ:", iobj, " LVL:", ilevel, &
+                        " HEALPix_LVL:", an%level, " NSIDE:", an%nside, " NPIX:", an%npix, &
+                        " ENTROPY:", an%entropy
+
+                    ! Maxima schreiben
+                    write(unit, '(A, I5)', advance='no') "  MAXIMA_COUNT:", an%nmax
+                    if (an%nmax > 0 .and. allocated(an%maxima_pix)) then
+                        write(unit, '(A)', advance='no') " | PIX:"
+                        do i = 1, an%nmax
+                            write(unit, '(I8)', advance='no') an%maxima_pix(i)
+                        end do
+                        write(unit, '(A)', advance='no') " | VAL:"
+                        do i = 1, an%nmax
+                            write(unit, '(I8)', advance='no') an%maxima_value(i)
+                        end do
+                    end if
+                    write(unit, *) ! Zeilenumbruch
+
+                    ! Basins / Einzugsgebiete schreiben
+                    write(unit, '(A, I5)', advance='no') "  BASIN_COUNT: ", an%nbasin
+                    if (an%nbasin > 0 .and. allocated(an%basin_pix)) then
+                        write(unit, '(A)', advance='no') " | PIX:"
+                        do i = 1, an%nbasin
+                            write(unit, '(I8)', advance='no') an%basin_pix(i)
+                        end do
+                        write(unit, '(A)', advance='no') " | COUNTS:"
+                        do i = 1, an%nbasin
+                            write(unit, '(I8)', advance='no') an%basin_counts(i)
+                        end do
+                    end if
+                    write(unit, *) ! Zeilenumbruch
+
+                end associate
+            end do
+        end do
+
+        close(unit)
+    end do
+
+end subroutine write_odf_analysis_text
+
+subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel, nobj,prefix_odf,path_odf)
+
+    implicit none
+
+    type(odf_lib_type), intent(out) :: odf_lib
+    type(lifting_plan_type), intent(in) :: lifting_plan
+    type(cv_plan) :: cv_p
+
+    integer, intent(in) :: max_lag
+    integer, intent(in) :: basis_index
+    integer, intent(in) :: nobj, nlevel
+
+    integer :: istate, ilag, iodf, ilevel, iobj
+    integer :: npix, nside, lvl_nside, lvl_npix
+    character(len=*),intent(in) :: prefix_odf,path_odf
+
+    nside = 2**(nlevel-1)
+    npix  = 12 * 4**(nlevel-1)
+
+   
+    
+    odf_lib%max_lag = max_lag
+    odf_lib%n_odf   = size(lifting_plan%istates) * (max_lag + 1)
+    write(0,*) odf_lib%n_odf, lifting_plan%istates
+
+    allocate(odf_lib%odf(odf_lib%n_odf))
+    allocate(odf_lib%c2_symmetry(nobj))
+    allocate(odf_lib%entropy(nobj, max_lag+1, nlevel))
+
+    odf_lib%entropy = 0.0_8
+    odf_lib%nlevel  = nlevel
+    odf_lib%c2_symmetry = .false.
+    
+    write(0,*) 'npix odf', npix, lifting_plan%istates,nobj
+    do iobj=1,nobj/2
+    if(  trim(cv_p%object(iobj)%point_group)=='C2') then
+    	odf_lib%c2_symmetry(iobj*2)=.true.
+    end if
+    write(0,*)iobj, cv_p%object(iobj)%point_group,odf_lib%c2_symmetry(iobj*2)
+    end do
+    !pause
+
+    iodf = 0
+    do istate = 1, size(lifting_plan%istates)
+        do ilag = 0, max_lag
+            iodf = iodf + 1
+
+          write(odf_lib%odf(iodf)%odf_name, &
+    '(*(A), "state_", I4.4, "_lag_", I3.3)') &
+    trim(prefix_odf), "/", trim(path_odf), &
+    lifting_plan%istates(istate), ilag
+                
+                
+                
+
+            odf_lib%odf(iodf)%state       = lifting_plan%istates(istate)
+            odf_lib%odf(iodf)%lag         = ilag
+            odf_lib%odf(iodf)%basis_index = basis_index
+            odf_lib%odf(iodf)%nside       = nside
+            odf_lib%odf(iodf)%npix        = npix
+
+            ! 1. Histogramm-Array allokieren
+            allocate(odf_lib%odf(iodf)%hist(npix, nobj))
+            odf_lib%odf(iodf)%hist = 0
+
+            ! 2. NEU: analysis-Array allokieren (Dimensionen: nobj, nlevel)
+            allocate(odf_lib%odf(iodf)%analysis(nobj, nlevel))
+
+            ! 3. Pre-Initialisierung der Level-Metadaten
+            do ilevel = 1, nlevel
+                lvl_nside = 2**(ilevel - 1)
+                lvl_npix  = 12 * 4**(ilevel - 1)
+
+                do iobj = 1, nobj
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%level   = ilevel
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%nside   = lvl_nside
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%npix    = lvl_npix
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%entropy = 0.0d0
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%nmax    = 0
+                    odf_lib%odf(iodf)%analysis(iobj, ilevel)%nbasin  = 0
+                end do
+            end do
+
+        end do
+    end do
+    
+     
+   ! odf_lib%odf(:)%odf_name=odf_name
+
+end subroutine init_odf_lib
+
+
+
+
+
+subroutine set_odf_analysis_maxima(an, nmax, pix, values)
+    implicit none
+    type(odf_level_analysis_type), intent(inout) :: an
+    integer, intent(in) :: nmax
+    integer, intent(in) :: pix(nmax)
+    integer, intent(in) :: values(nmax)
+
+    an%nmax = nmax
+    if (allocated(an%maxima_pix))   deallocate(an%maxima_pix)
+    if (allocated(an%maxima_value)) deallocate(an%maxima_value)
+
+    if (nmax > 0) then
+        allocate(an%maxima_pix(nmax))
+        allocate(an%maxima_value(nmax))
+        an%maxima_pix   = pix
+        an%maxima_value = values
+    end if
+end subroutine set_odf_analysis_maxima
+
+subroutine compute_odf_entropy(odf_lib)
+
+implicit none
+
+type(odf_lib_type), intent(inout) :: odf_lib
+
+integer :: iodf
+integer :: iobj
+integer :: ilag
+integer :: lag
+
+
+real(8) :: S
+
+
+do iodf=1,odf_lib%n_odf
+
+
+    lag = odf_lib%odf(iodf)%lag
+
+
+    do iobj=1,size(odf_lib%odf(iodf)%hist,2)
+
+
+        S = continuous_entropy( &
+            odf_lib%odf(iodf)%hist(:,iobj), &
+            odf_lib%odf(iodf)%nside )
+
+
+        !
+        ! lag beginnt bei 0
+        ! Arrayindex bei 1
+        !
+
+!        odf_lib%entropy(iobj,iodf,)=S
+
+
+    enddo
+
+
+enddo
+
+
+end subroutine compute_odf_entropy
+
+subroutine write_odf_lib(odf_lib)
+
+implicit none
+
+type(odf_lib_type),intent(in) :: odf_lib
+
+integer :: iodf
+integer :: ipix
+integer :: unit
+
+character(len=256) :: filename
+
+do iodf=1,odf_lib%n_odf
+
+    filename=trim(odf_lib%odf(iodf)%odf_name)//".txt"
+
+    open(newunit=unit,file=filename,status="replace")
+    write(unit,*) "# nside ",odf_lib%odf(iodf)%nside
+    write(unit,*) "# npix  ",odf_lib%odf(iodf)%npix
+    write(unit,*) "# nobj  ",size(odf_lib%odf(iodf)%hist,2)
+
+    do ipix=1,odf_lib%odf(iodf)%npix
+
+        write(unit,*) odf_lib%odf(iodf)%hist(ipix,:)
+
+    enddo
+
+    close(unit)
+
+enddo
+
+end subroutine
+
+subroutine write_entropy(odf_lib)
+
+implicit none
+
+type(odf_lib_type),intent(in)::odf_lib
+
+integer :: unit
+integer :: iobj,ilag,ilevel
+
+
+open(newunit=unit,file="odf_entropy.txt",status="replace")
+
+
+write(unit,*) "# object lag level entropy"
+
+
+do iobj=1,size(odf_lib%entropy,1)
+
+do ilag=0,odf_lib%max_lag
+
+do ilevel=1,odf_lib%nlevel
+
+
+write(unit,*) &
+iobj,ilag,ilevel, &
+odf_lib%entropy(iobj,ilag+1,ilevel)
+
+
+enddo
+enddo
+enddo
+
+
+close(unit)
+
+
+end subroutine write_entropy
+
+
+subroutine sample_odfs_C2( &
+    odf_lib, &
+    lifting_plan, &
+    prefix_tra, &
+    path_tra, &
+    basis_index, &
+    tau_mem, &
+    dt,odf_name)
+
+    implicit none
+
+    type(odf_lib_type), intent(inout) :: odf_lib
+    type(lifting_plan_type), intent(in) :: lifting_plan
+
+    character(len=*), intent(in) :: prefix_tra
+    character(len=*), intent(in) :: path_tra
+
+    integer, intent(in) :: basis_index
+
+    real(8), intent(in) :: tau_mem
+    real(8), intent(in) :: dt
+
+    character(len=2048) :: filename
+    character(len=2048) :: path_and_prefix
+    character(len=*) :: odf_name
+    type(lifted_trajectory) :: raw_tra
+
+    integer :: istate, irep, iblock
+    integer :: iodf, ipix, iobj
+    integer :: nframe, nobj
+    integer :: t, tlag
+
+    real(8) :: rot(3,3)
+    real(8) :: vec_local(3)
+    real(8) :: vec(3)
+    real(8) :: lsq
+    real(8) :: length
+
+    real(8), allocatable :: rots(:,:,:)
+
+
+    length = huge(length)
+
+    path_and_prefix = trim(path_tra) // '/' // trim(prefix_tra)
+
+
+    do istate = 1, size(lifting_plan%istates)
+        do irep = 1, lifting_plan%nreps(istate)
+            do iblock = 1, lifting_plan%nblock(istate,irep)
+
+                call make_filename_lifted_tra( &
+                    istate, irep, iblock, &
+                    path_and_prefix, filename)
+
+                write(0,*) trim(filename), ' in odf sampling'
+
+                call read_trajectory(filename, raw_tra)
+
+                write(0,*) &
+                    lifting_plan%start_block(istate,irep,iblock), &
+                    lifting_plan%end_block(istate,irep,iblock)
+
+                nobj   = size(raw_tra%vec,2)
+                nframe = size(raw_tra%vec,3)
+
+
+                ! --------------------------------------------------------
+                ! Geglättete Backbone-Basis einmal für diesen Block
+                ! --------------------------------------------------------
+
+                allocate(rots(3,3,nframe))
+
+                call build_smoothed_backbone_basis( &
+                    raw_tra, &
+                    basis_index, &
+                    tau_mem, &
+                    dt, &
+                    rots)
+
+
+                ! --------------------------------------------------------
+                ! Alle ODFs dieses Zustands
+                ! --------------------------------------------------------
+
+                do iodf = 1, odf_lib%n_odf
+
+                    if (odf_lib%odf(iodf)%state /= &
+                        lifting_plan%istates(istate)) cycle
+
+
+                    do t = 1, nframe
+
+                        tlag = t + odf_lib%odf(iodf)%lag
+
+                        if (tlag > nframe) cycle
+
+
+                        ! Basis bei Referenzzeit t
+                        rot = rots(:,:,t)
+
+
+                        do iobj = 1, size(odf_lib%odf(iodf)%hist,2)
+
+                            ! Orientierung bei t + lag
+                            vec = raw_tra%vec(:,iobj,tlag)
+
+                            lsq = norm2(vec)
+
+                            if (lsq == 0.0_8) cycle
+
+                            length = min(sqrt(lsq),length)
+
+                            vec = vec / sqrt(lsq)
+
+
+                            ! In geglättete lokale Basis von t
+                            vec_local = matmul(rot,vec)
+
+
+                            ! HEALPix
+                            call vec2pix_nest( &
+                                odf_lib%odf(iodf)%nside, &
+                                vec_local, &
+                                ipix)
+
+
+                            odf_lib%odf(iodf)%hist(ipix+1,iobj) = &
+                                odf_lib%odf(iodf)%hist(ipix+1,iobj) + 1
+
+
+                            ! C2-Symmetrie bei Bedarf:
+                            !
+                            ! if (odf_lib%c2_symmetry(iobj)) then
+                            !
+                            !     vec_local = -vec_local
+                            !
+                            !     call vec2pix_nest( &
+                            !         odf_lib%odf(iodf)%nside, &
+                            !         vec_local, &
+                            !         ipix)
+                            !
+                            !     odf_lib%odf(iodf)%hist(ipix+1,iobj) = &
+                            !         odf_lib%odf(iodf)%hist(ipix+1,iobj) + 1
+                            !
+                            ! end if
+
+                        end do
+                    end do
+
+                end do
+
+
+                write(0,*) 'max length', length
+
+                deallocate(rots)
+
+            end do
+        end do
+    end do
+
+
+    write(0,*) 'final', length
+
+
+    call write_odf_lib(odf_lib)
+    call compute_odf_entropy_levels(odf_lib)
+    call write_entropy(odf_lib)
+    call write_odf_analysis_text(odf_lib)
+
+end subroutine sample_odfs_C2
+
+
+
+
+
+subroutine sample_odfs_C2_old(odf_lib,lifting_plan,prefix_tra,path_tra)
+implicit none
+character(len=*),intent(in) ::prefix_tra,path_tra
+character(len=2048) ::filename,path_and_prefix
+
+type(odf_lib_type), intent(inout) :: odf_lib
+type(lifting_plan_type)  :: lifting_plan
+type(lifted_trajectory)  :: lifted_tra
+integer :: istate,irep,iblock
+real(8) :: rot(3,3),vec_local(3),vec(3)
+integer :: iodf,ipix,iobj,tlag
+integer :: nframe,t,basis_index
+real(8) :: length,lsq
+
+do istate=1,size(lifting_plan%istates)
+do irep=1,lifting_plan%nreps(istate)
+do iblock=1,lifting_plan%nblock(istate,irep)
+
+
+length=huge(length)
+path_and_prefix=path_tra//'/'//prefix_tra
+
+call make_filename_lifted_tra(istate,irep,iblock,path_and_prefix,filename)
+write(0,*) trim(filename),'in odf sampling'
+call read_trajectory(filename,lifted_tra)
+
+write(0,*) lifting_plan%start_block(istate,irep,iblock),lifting_plan%end_block(istate,irep,iblock)
+nframe = size(lifted_tra%vec,3)
+            ! alle ODFs dieses Datensatzes
+            	
+
+            !
+            do iodf=1,odf_lib%n_odf
+            basis_index= odf_lib%odf(iodf)%basis_index
+
+                if(odf_lib%odf(iodf)%state /= &
+                   lifting_plan%istates(istate)) cycle
+                do t=1,nframe
+                    tlag = t + odf_lib%odf(iodf)%lag
+                    if(tlag > nframe) cycle
+                    !
+                    ! Basis bei Referenzzeit t
+                    !
+                    call extract_backbone_basis( &
+                        odf_lib%odf(iodf)%basis_index, &
+                        lifted_tra,t,rot)
+                    do iobj=1,size(odf_lib%odf(iodf)%hist,2)
+                        !
+                        ! Orientierung bei t+lag
+                        !
+                        vec = lifted_tra%vec(:,iobj,tlag)
+                        lsq=norm2(vec)
+                        length=min(sqrt(lsq),length)
+                        vec =vec/norm2(vec)
+                        !
+                        ! in Basis von t
+                        !
+                        vec_local = matmul(rot,vec)
+                        call vec2pix_nest( &
+                            odf_lib%odf(iodf)%nside, &
+                            vec_local,ipix)
+                        
+                       
+                        odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
+                        odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
+
+                        
+                        !if(odf_lib%c2_symmetry(iobj)) then
+                        !vec_local=-vec_local
+                        !! write(0,*) ipix,'nonrot'
+                        !     call vec2pix_nest( &
+                        !    odf_lib%odf(iodf)%nside, &
+                        !    vec_local,ipix)
+                        ! !write(0,*) ipix ,'rot'
+                        ! !pause
+                        !
+                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
+                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
+                        !
+                        !end if
+                        !write(0,*)'shape', shape(lifted_tra%vec)
+                        !pause
+                    enddo
+                enddo
+            enddo
+           ! write(*,*) "block",iblock, &
+           !sum(odf_lib%odf(1)%hist)
+
+           	   !pause
+           	      write(0,*)'max length',length
+end do
+end do
+end do
+
+write(0,*) 'final',length
+
+call  write_odf_lib(odf_lib)
+call compute_odf_entropy_levels(odf_lib)
+call write_entropy(odf_lib)
+call write_odf_analysis_text(odf_lib)
+end subroutine sample_odfs_C2_old
+
+
+
+subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
+                                         tau_mem, dt, rots)
+
+    type(lifted_trajectory), intent(in)  :: lifted_tra
+    integer,                 intent(in)  :: basis_index
+    real(8),                 intent(in)  :: tau_mem
+    real(8),                 intent(in)  :: dt
+    real(8),                 intent(out) :: rots(:,:,:)
+
+    integer :: nframe, t, i, j
+
+    real(8) :: alpha
+    real(8) :: v1(3), v2(3)
+    real(8) :: A1(3,3), A2(3,3)
+    real(8) :: P1(3,3), B2(3,3)
+
+    real(8) :: e1(3), e2(3), e3(3)
+    real(8) :: nrm
+
+    real(8) :: prev_e1(3), prev_e2(3)
+
+
+    ! ============================================================
+    ! Dimensions / parameters
+    ! ============================================================
+
+    	
+   ! write(0,*) shape(lifted_tra%vec)
+   
+    nframe = size(lifted_tra%vec,3)
+
+    if (size(rots,1) /= 3 .or. size(rots,2) /= 3 .or. &
+        size(rots,3) /= nframe) then
+        error stop "build_smoothed_backbone_basis: wrong rots dimensions"
+    end if
+
+    if (tau_mem <= 0.0_8) then
+        error stop "build_smoothed_backbone_basis: tau_mem <= 0"
+    end if
+
+    if (dt <= 0.0_8) then
+        error stop "build_smoothed_backbone_basis: dt <= 0"
+    end if
+
+
+    ! ============================================================
+    ! Exponential memory factor
+    !
+    ! A(t) = alpha*A(t-dt)
+    !      + (1-alpha)*v(t)v(t)^T
+    ! ============================================================
+
+    alpha = exp(-dt/tau_mem)
+
+
+    ! ============================================================
+    ! Start with zero memory
+    ! ============================================================
+
+    A1 = 0.0_8
+    A2 = 0.0_8
+
+
+    ! ============================================================
+    ! Main trajectory loop
+    ! ============================================================
+
+    do t = 1, nframe
+
+
+        ! ========================================================
+        ! Instantaneous v1
+        ! ========================================================
+
+        v1 = lifted_tra%vec(:,2*basis_index-1,t)
+
+        
+        
+       ! write(0,*) v1,'v1'
+        
+        nrm = norm2(v1)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: |v1| too small"
+        end if
+
+        v1 = v1/nrm
+
+
+        ! ========================================================
+        ! Instantaneous v2
+        !
+        ! Orthogonalize against instantaneous v1.
+        ! ========================================================
+
+        v2 = lifted_tra%vec(:,2*basis_index,t)
+        
+        !write(0,*) v2,'v2',dot_product(v1,v2)
+        !pause
+        nrm = norm2(v2)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: |v2| too small"
+        end if
+        
+        v2 = v2/nrm
+        v2 = v2 - dot_product(v2,v1)*v1
+        nrm = norm2(v2)
+        
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: v1 and v2 almost parallel"
+        end if
+        v2 = v2/nrm
+        ! ========================================================
+        ! Exponential tensor averages
+        ! ========================================================
+
+        call update_exponential_tensor(A1, v1, alpha)
+        call update_exponential_tensor(A2, v2, alpha)
+
+
+        ! ========================================================
+        ! First basis vector
+        !
+        ! e1 = principal eigenvector of A1
+        ! ========================================================
+
+        call principal_eigenvector_symmetric_3x3(A1, e1)
+
+        nrm = norm2(e1)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: e1 too small"
+        end if
+
+        e1 = e1/nrm
+
+
+        ! ========================================================
+        ! Projector onto plane perpendicular to e1
+        !
+        ! P1 = I - e1 e1^T
+        ! ========================================================
+
+        P1 = 0.0_8
+
+        do i = 1,3
+            P1(i,i) = 1.0_8
+        end do
+
+        do i = 1,3
+            do j = 1,3
+                P1(i,j) = P1(i,j) - e1(i)*e1(j)
+            end do
+        end do
+
+
+        ! ========================================================
+        ! Constrained second tensor
+        !
+        ! B2 = P1 A2 P1
+        !
+        ! The principal eigenvector of B2 maximizes
+        !
+        !   e2^T A2 e2
+        !
+        ! subject to
+        !
+        !   |e2| = 1
+        !   e2 . e1 = 0
+        ! ========================================================
+
+        B2 = matmul(P1, matmul(A2, P1))
+
+
+        ! ========================================================
+        ! Second basis vector
+        ! ========================================================
+
+        call principal_eigenvector_symmetric_3x3(B2, e2)
+        nrm = norm2(e2)
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e2 too small"
+        end if
+        e2 = e2/nrm
+        ! ========================================================
+        ! Numerical cleanup:
+        ! explicitly remove any tiny component along e1.
+        !
+        ! This should be ~ machine precision because B2 already
+        ! lives in the e1-perpendicular subspace.
+        ! ========================================================
+        e2 = e2 - dot_product(e2,e1)*e1
+        nrm = norm2(e2)
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e2 degenerate"
+        end if
+        e2 = e2/nrm
+        ! =======================================================
+        ! Fix arbitrary eigenvector signs
+        ! ========================================================
+        if (t > 1) then
+            if (dot_product(e1,prev_e1) < 0.0_8) then
+                e1 = -e1
+            end if
+            if (dot_product(e2,prev_e2) < 0.0_8) then
+                e2 = -e2
+            end if
+        end if
+        ! ========================================================
+        ! Third basis vector
+        ! ========================================================
+        e3 = cross(e1,e2)
+        nrm = norm2(e3)
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e1 and e2 degenerate"
+        end if
+        e3 = e3/nrm
+        ! ========================================================
+        ! Store basis vectors as ROWS
+        !
+        ! rot(t) =
+        !
+        !   e1^T
+        !   e2^T
+        !   e3^T
+        !
+        ! so that
+        
+        ! loc = matmul(rot,vec)
+        ! ========================================================
+        rots(1,:,t) = e1
+        rots(2,:,t) = e2
+        rots(3,:,t) = e3
+        ! ========================================================
+        ! Previous directions for sign continuity
+        ! ========================================================
+        prev_e1 = e1
+        prev_e2 = e2
+    end do
+end subroutine build_smoothed_backbone_basis
+
+
+
+subroutine update_exponential_tensor(A, v, alpha)
+
+    real(8), intent(inout) :: A(3,3)
+    real(8), intent(in)    :: v(3)
+    real(8), intent(in)    :: alpha
+
+    integer :: i, j
+
+    do i = 1, 3
+        do j = 1, 3
+            A(i,j) = alpha*A(i,j) &
+                   + (1.0_8-alpha)*v(i)*v(j)
+        end do
+    end do
+
+end subroutine update_exponential_tensor
+
+subroutine outer_product(v, A)
+
+    real(8), intent(in)  :: v(3)
+    real(8), intent(out) :: A(3,3)
+
+    integer :: i, j
+
+    do i = 1, 3
+        do j = 1, 3
+            A(i,j) = v(i)*v(j)
+        end do
+    end do
+
+end subroutine outer_product
+
+subroutine principal_eigenvector_symmetric_3x3(A, e)
+
+    implicit none
+
+    real(8), intent(in)  :: A(3,3)
+    real(8), intent(out) :: e(3)
+
+    real(8) :: Acopy(3,3)
+    real(8) :: eigval(3)
+    real(8) :: work(100)
+    integer :: iwork(30)
+    integer :: info
+    integer :: imax
+
+    integer :: lwork
+    integer :: liwork
+
+    character(len=1) :: jobz
+    character(len=1) :: uplo
+
+
+    ! DSYEVD destroys its matrix argument,
+    ! so work on a copy.
+
+    Acopy = A
+
+    jobz = 'V'
+    uplo = 'U'
+
+    lwork  = 100
+    liwork = 30
+
+
+    call dsyevd(jobz, uplo, 3, Acopy, 3, eigval, &
+                work, lwork, iwork, liwork, info)
+
+
+    if (info /= 0) then
+        write(*,*) 'ERROR in DSYEVD, INFO = ', info
+        error stop
+    end if
+
+
+    ! DSYEVD returns eigenvalues in ascending order:
+    !
+    ! eigval(1) <= eigval(2) <= eigval(3)
+    !
+    ! Therefore the principal eigenvector is column 3.
+
+    imax = 3
+
+    e = Acopy(:,imax)
+
+
+    ! Normalize defensively.
+
+    e = e / norm2(e)
+
+end subroutine principal_eigenvector_symmetric_3x3
+
+subroutine extract_backbone_basis(basis_index,lifted_tra, t, rot)
+    type(lifted_trajectory), intent(in) :: lifted_tra
+    integer, intent(in)                 :: t
+    real(8), intent(out)                :: rot(3,3)
+    real(8) :: one(3,3)
+    real(8) :: v1(3),v2(3),v3(3)
+    integer :: basis_index
+    one=0._8
+    one(1,1)=1._8;one(2,2)=1._8;one(3,3)=1._8
+
+    v1=lifted_tra%vec(:, 2*basis_index-1, t)
+    v2=lifted_tra%vec(:, 2*basis_index  , t)
+    v1=v1/norm2(v1)
+    v2=v2/norm2(v2)
+    v2=v2-dot_product(v1,v2)*v1
+    v2=v2/norm2(v2)
+    v3=cross(v1,v2)
+    v3=v3/norm2(v3)
+    
+    rot(1,:) = v1
+    rot(2,:) = v2
+    rot(3,:) = v3
+
+end subroutine extract_backbone_basis
+
+function cross(x1,x2) result(c)
+
+implicit none
+
+real(8), intent(in) :: x1(3), x2(3)
+real(8) :: c(3)
+
+c(1) = x1(2)*x2(3) - x1(3)*x2(2)
+c(2) = x1(3)*x2(1) - x1(1)*x2(3)
+c(3) = x1(1)*x2(2) - x1(2)*x2(1)
+
+end function 
+
+subroutine insert_rare_event(events,nevent,kmax,event)
+
+    implicit none
+
+    type(rare_event_type), intent(inout) :: events(:)
+    integer, intent(inout) :: nevent
+    integer, intent(in) :: kmax
+    type(rare_event_type), intent(in) :: event
+
+    integer :: i
+    type(rare_event_type) :: tmp
+
+
+    ! Liste noch nicht voll
+    if (nevent < kmax) then
+
+        nevent = nevent + 1
+        events(nevent) = event
+
+    else
+
+        ! Ereignis nicht groß genug
+        if (event%angle <= events(nevent)%angle) return
+
+        events(nevent) = event
+
+    end if
+
+
+    ! Liste absteigend sortieren
+    do i=nevent,2,-1
+
+        if (events(i)%angle <= events(i-1)%angle) exit
+
+        tmp = events(i)
+        events(i) = events(i-1)
+        events(i-1) = tmp
+
+    end do
+
+end subroutine insert_rare_event
+
+subroutine sample_rare_events(odf_lib,lifting_plan,kmax)
+
+    implicit none
+
+    type(odf_lib_type), intent(in) :: odf_lib
+    type(lifting_plan_type), intent(in) :: lifting_plan
+    integer, intent(in) :: kmax
+
+    character(len=800) :: filename,prefix
+
+    type(lifted_trajectory) :: lifted_tra
+
+    type(rare_event_type), allocatable :: events(:,:,:)
+    type(rare_event_type) :: event
+
+    integer, allocatable :: nevent(:,:)
+    integer, allocatable :: timestep(:)
+
+    integer :: istate,irep,iblock
+    integer :: iodf,iobj
+    integer :: t,tlag
+    integer :: nframe
+    integer :: nobj
+    integer :: basis_index
+    integer :: ipix
+
+    integer :: absolute_t
+    integer :: absolute_tlag
+
+    real(8) :: rot(3,3)
+    real(8) :: vec(3)
+    real(8) :: vec_ref(3)
+    real(8) :: vec_local(3)
+
+    real(8) :: nvec
+    real(8) :: nref
+    real(8) :: dot
+    real(8) :: angle
+
+
+    !=========================================================
+    ! Anzahl Objekte
+    !=========================================================
+
+    nobj = size(odf_lib%odf(1)%hist,2)
+
+
+    !=========================================================
+    ! Speicher für die Top-K Events
+    !
+    ! events(object,odf,event)
+    !=========================================================
+
+    allocate(events(nobj,odf_lib%n_odf,kmax))
+    allocate(nevent(nobj,odf_lib%n_odf))
+
+    events%angle = -1.d0
+    nevent = 0
+
+
+    !=========================================================
+    ! Zustände
+    !=========================================================
+
+    do istate=1,size(lifting_plan%istates)
+
+        !=====================================================
+        ! Replikate
+        !=====================================================
+
+        do irep=1,lifting_plan%nreps(istate)
+
+            !=================================================
+            ! Blöcke
+            !=================================================
+
+            do iblock=1,lifting_plan%nblock(istate,irep)
+
+
+                !-------------------------------------------------
+                ! lifted trajectory laden
+                !-------------------------------------------------
+
+                prefix='lifted_tra'
+
+                call make_filename_lifted_tra( &
+                    istate,irep,iblock,prefix,filename)
+
+                call read_trajectory(filename,lifted_tra)
+
+                nframe = size(lifted_tra%vec,3)
+
+
+                !-------------------------------------------------
+                ! Zuordnung:
+                !
+                ! timestep(t) = ursprünglicher MD timestep,
+                ! der im t-ten Frame von lifted_tra steckt.
+                !
+                ! Diese Zuordnung kommt ausschließlich aus
+                ! timestep_pattern.
+                !-------------------------------------------------
+
+                call make_timestep_mapping( &
+                    lifting_plan, &
+                    istate, &
+                    irep, &
+                    iblock, &
+                    timestep)
+
+
+                !-------------------------------------------------
+                ! Sicherheitscheck
+                !-------------------------------------------------
+
+                if (size(timestep) /= nframe) then
+
+                    write(0,*) &
+                        'ERROR: timestep mapping does not match ', &
+                        'lifted trajectory'
+
+                    write(0,*) 'state  = ',istate
+                    write(0,*) 'rep    = ',irep
+                    write(0,*) 'block  = ',iblock
+                    write(0,*) 'mapping = ',size(timestep)
+                    write(0,*) 'nframe  = ',nframe
+
+                    stop
+
+                endif
+
+
+                !=================================================
+                ! Alle ODFs
+                !=================================================
+
+                do iodf=2,2!odf_lib%n_odf
+write(0,*) odf_lib%odf(iodf)%lag,'lag'
+!pause
+
+                    !------------------------------------------------
+                    ! ODF muss zum aktuellen Zustand gehören
+                    !------------------------------------------------
+
+                    if (odf_lib%odf(iodf)%state /= &
+                        lifting_plan%istates(istate)) cycle
+
+
+                    basis_index = &
+                        odf_lib%odf(iodf)%basis_index
+
+
+                    !================================================
+                    ! Alle Referenzframes
+                    !================================================
+
+                    do t=1,nframe
+
+
+                        !------------------------------------------------
+                        ! tlag ist ein Index in lifted_tra
+                        !
+                        ! Genau wie bei sample_odfs_C2.
+                        !------------------------------------------------
+
+                        tlag = t + odf_lib%odf(iodf)%lag
+
+                        if (tlag > nframe) cycle
+
+
+                        !------------------------------------------------
+                        ! Basis bei Referenzzeit t
+                        !------------------------------------------------
+
+                        call extract_backbone_basis( &
+                            basis_index, &
+                            lifted_tra, &
+                            t, &
+                            rot)
+
+
+                        !================================================
+                        ! Alle Objekte
+                        !================================================
+
+                        do iobj=1,size(odf_lib%odf(iodf)%hist,2)
+
+
+                            !--------------------------------------------
+                            ! Orientierung bei t
+                            !--------------------------------------------
+
+                            vec_ref = &
+                                lifted_tra%vec(:,iobj,t)
+
+                            nref = norm2(vec_ref)
+
+                            if (nref <= 1.d-12) cycle
+
+                            vec_ref = vec_ref/nref
+
+
+                            !--------------------------------------------
+                            ! Orientierung bei t+lag
+                            !--------------------------------------------
+
+                            vec = &
+                                lifted_tra%vec(:,iobj,tlag)
+
+                            nvec = norm2(vec)
+
+                            if (nvec <= 1.d-12) cycle
+
+                            vec = vec/nvec
+
+
+                            !--------------------------------------------
+                            ! In lokale Basis von t transformieren
+                            !--------------------------------------------
+
+                            vec_ref = matmul(rot,vec_ref)
+                            vec_local = matmul(rot,vec)
+
+
+                            !--------------------------------------------
+                            ! Winkeländerung
+                            !
+                            ! C2: v und -v sind äquivalent
+                            !--------------------------------------------
+
+                            dot = dot_product(vec_ref,vec_local)
+
+                            dot = max(-1.d0,min(1.d0,dot))
+
+                            angle = acos(abs(dot))
+
+
+                            !--------------------------------------------
+                            ! Zielpixel bestimmen
+                            !--------------------------------------------
+
+                            call vec2pix_nest( &
+                                odf_lib%odf(iodf)%nside, &
+                                vec_local, &
+                                ipix)
+
+
+                            !================================================
+                            ! Event erzeugen
+                            !================================================
+
+                            event%angle = angle
+
+                            event%istate = &
+                                lifting_plan%istates(istate)
+
+                            event%irep = &
+                                lifting_plan%ireps(istate,irep)
+
+                            event%iblock = iblock
+
+                            event%frame = t
+                            event%frame_lag = tlag
+
+                            event%object = iobj
+                            event%iodf = iodf
+
+                            event%pixel = ipix
+
+
+                            !------------------------------------------------
+                            ! WICHTIG:
+                            !
+                            ! Hier wird NICHT aus stride oder lag
+                            ! zurückgerechnet.
+                            !
+                            ! timestep(:) wurde direkt aus
+                            ! timestep_pattern aufgebaut.
+                            !------------------------------------------------
+
+                            event%timestep = timestep(t)
+                            event%timestep_lag = timestep(tlag)
+
+
+                            !================================================
+                            ! Event in Top-K Liste einfügen
+                            !================================================
+
+                            call insert_rare_event( &
+                                events(iobj,iodf,:), &
+                                nevent(iobj,iodf), &
+                                kmax, &
+                                event)
+
+                        enddo
+
+                    enddo
+
+                enddo
+
+                
+                 !=========================================================
+    ! Ausgabe
+    !=========================================================
+
+    write(0,*)
+    write(0,*) '=============================================='
+    write(0,*) 'Rare angular events'
+    write(0,*) '=============================================='
+
+
+    do iodf=1,odf_lib%n_odf
+
+        write(0,*)
+        write(0,*) 'ODF ',iodf
+
+        do iobj=1,nobj
+
+            if (nevent(iobj,iodf) == 0) cycle
+
+            write(0,*)
+            write(0,*) 'Object ',iobj
+
+            do t=1,nevent(iobj,iodf)
+
+                write(0,'(I5,2X,F12.6,2X,F10.3,2X, &
+                          A,I8,2X,A,I8,2X,A,I8)') &
+                    t, &
+                    events(iobj,iodf,t)%angle, &
+                    events(iobj,iodf,t)%angle * &
+                        180.d0/acos(-1.d0), &
+                    't=',events(iobj,iodf,t)%timestep, &
+                    't2=',events(iobj,iodf,t)%timestep_lag, &
+                    'pixel=',events(iobj,iodf,t)%pixel
+
+            enddo
+
+        enddo
+
+    enddo
+
+    
+    !pause
+    
+                deallocate(timestep)
+
+            enddo
+
+        enddo
+
+    enddo
+
+
+    !=========================================================
+    ! Ausgabe
+    !=========================================================
+
+    write(0,*)
+    write(0,*) '=============================================='
+    write(0,*) 'Rare angular events'
+    write(0,*) '=============================================='
+
+
+    do iodf=1,odf_lib%n_odf
+
+        write(0,*)
+        write(0,*) 'ODF ',iodf
+
+        do iobj=1,nobj
+
+            if (nevent(iobj,iodf) == 0) cycle
+
+            write(0,*)
+            write(0,*) 'Object ',iobj
+
+            do t=1,nevent(iobj,iodf)
+
+                write(0,'(I5,2X,F12.6,2X,F10.3,2X, &
+                          A,I8,2X,A,I8,2X,A,I8)') &
+                    t, &
+                    events(iobj,iodf,t)%angle, &
+                    events(iobj,iodf,t)%angle * &
+                        180.d0/acos(-1.d0), &
+                    't=',events(iobj,iodf,t)%timestep, &
+                    't2=',events(iobj,iodf,t)%timestep_lag, &
+                    'pixel=',events(iobj,iodf,t)%pixel
+
+            enddo
+
+        enddo
+
+    enddo
+
+
+    deallocate(events)
+    deallocate(nevent)
+
+end subroutine sample_rare_events
+
+
+subroutine make_timestep_mapping( &
+    lifting_plan,istate,irep,iblock,timestep)
+
+    implicit none
+
+    type(lifting_plan_type), intent(in) :: lifting_plan
+
+    integer, intent(in) :: istate
+    integer, intent(in) :: irep
+    integer, intent(in) :: iblock
+
+    integer, allocatable, intent(out) :: timestep(:)
+
+    integer :: i
+    integer :: n
+    integer :: start_t
+
+
+    start_t = lifting_plan%start_block( &
+        istate,irep,iblock)
+
+
+    !=========================================================
+    ! Anzahl der tatsächlich ausgewählten Frames
+    !=========================================================
+
+    n = count(lifting_plan%timestep_pattern( &
+        :,istate,irep,iblock))
+
+
+    allocate(timestep(n))
+
+
+    !=========================================================
+    ! Originale Timesteps bestimmen
+    !=========================================================
+
+    n = 0
+
+    do i=1,size(lifting_plan%timestep_pattern,1)
+
+        if (.not.lifting_plan%timestep_pattern( &
+            i,istate,irep,iblock)) cycle
+
+        n = n + 1
+
+        timestep(n) = start_t + i - 1
+
+    enddo
+
+end subroutine make_timestep_mapping
+
+
+subroutine compute_odf_entropy_levels(odf_lib)
+
+implicit none
+
+type(odf_lib_type), intent(inout) :: odf_lib
+
+integer :: iodf
+integer :: iobj
+integer :: ilevel
+integer :: nside
+
+integer :: nfound
+integer :: nmax
+
+integer :: pix(10)
+integer :: value(10)
+
+integer, allocatable :: hist_level(:)
+
+integer, allocatable :: basin(:)
+integer, allocatable :: maxima(:)
+integer, allocatable :: basin_counts(:)
+
+real(8) :: S
+
+!allocate(odf_lib%entropy(size(odf_lib%odf(1)%hist,2),odf_lib%n_odf,odf_lib%nlevel))
+
+do iodf = 1, odf_lib%n_odf
+
+    do iobj = 1, size(odf_lib%odf(iodf)%hist,2)
+
+        do ilevel = 1, odf_lib%nlevel
+
+            !
+            ! Histogramm auf gewünschtes Level reduzieren
+            !
+            call downsample_hist( &
+                odf_lib%odf(iodf)%hist(:,iobj), &
+                odf_lib%nlevel, &
+                ilevel, &
+                hist_level )
+
+            nside = 2**(ilevel-1)
+
+            !
+            ! Entropie
+            !
+            S = continuous_entropy(hist_level,nside)
+
+            !
+            ! Lokale Maxima
+            !
+            call largest_maxima( &
+                hist_level, &
+                nside, &
+                10, &
+                nfound, &
+                pix, &
+                value )
+
+            !
+            ! Basin-Zerlegung
+            !
+            call find_hist_basins( &
+                hist_level, &
+                nside, &
+                basin, &
+                maxima, &
+                basin_counts, &
+                nmax )
+
+            !
+            !--------------------------------------------------
+            ! Ergebnisse speichern
+            !--------------------------------------------------
+            !
+
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%entropy = S
+            odf_lib%entropy(iobj,iodf,ilevel)=S
+            !
+            ! Maxima
+            !
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%nmax = nfound
+
+            if(allocated(odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_pix)) &
+                deallocate(odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_pix)
+
+            if(allocated(odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_value)) &
+                deallocate(odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_value)
+
+            allocate( &
+                odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_pix(nfound))
+
+            allocate( &
+                odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_value(nfound))
+
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_pix = &
+                pix(1:nfound)
+
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%maxima_value = &
+                value(1:nfound)
+
+            !
+            ! Basins
+            !
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%nbasin = nmax
+
+            if(allocated(odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_pix)) &
+                deallocate(odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_pix)
+
+            if(allocated(odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_counts)) &
+                deallocate(odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_counts)
+
+            allocate( &
+                odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_pix(nmax))
+
+            allocate( &
+                odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_counts(nmax))
+
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_pix = maxima
+
+            odf_lib%odf(iodf)%analysis(iobj,ilevel)%basin_counts = &
+                basin_counts
+
+            !
+            ! Aufräumen
+            !
+            if(allocated(hist_level))   deallocate(hist_level)
+            if(allocated(basin))        deallocate(basin)
+            if(allocated(maxima))       deallocate(maxima)
+            if(allocated(basin_counts)) deallocate(basin_counts)
+
+        enddo
+
+    enddo
+
+enddo
+
+end subroutine compute_odf_entropy_levels
+
+
+
+function continuous_entropy(hist,nside) result(S)
+
+implicit none
+
+integer, intent(in) :: hist(:)
+integer, intent(in) :: nside
+
+real(8) :: S
+
+integer :: npix
+integer :: i
+
+real(8) :: total
+real(8) :: domega
+real(8) :: p
+real(8) :: pi
+
+
+pi = acos(-1.0_8)
+
+
+npix = size(hist)
+
+
+total = sum(real(hist,8))
+
+
+if(total <= 0.0_8) then
+
+    S = 0.0_8
+    return
+
+endif
+
+
+
+domega = 4.0_8*pi / real(npix,8)
+
+
+
+S = 0.0_8
+
+
+do i=1,npix
+
+    if(hist(i) > 0) then
+
+        p = real(hist(i),8)/total
+
+        S = S - p*log(p)
+    endif
+enddo
+S=S+log(domega)
+
+end function continuous_entropy
+
+subroutine downsample_hist(hist_fine,level_fine,level_coarse,hist_coarse)
+
+implicit none
+
+integer,intent(in) :: level_fine
+integer,intent(in) :: level_coarse
+
+integer,intent(in) :: hist_fine(:)
+
+integer,allocatable,intent(out) :: hist_coarse(:)
+
+integer :: npix_coarse
+integer :: i
+integer :: ratio
+integer :: ipix
+
+
+npix_coarse = (level_coarse-1)
+npix_coarse =4**npix_coarse 
+npix_coarse =12*npix_coarse 
+
+if(npix_coarse==0) then
+	write(0,*) 'npix_coarse==0',level_coarse
+	write(0,*),level_fine,level_coarse
+stop
+		
+end if
+allocate(hist_coarse(npix_coarse))
+
+hist_coarse=0
+
+
+ratio = 4**(level_fine-level_coarse)
+
+
+do i=1,size(hist_fine)
+
+    ipix=(i-1)/ratio + 1
+
+    hist_coarse(ipix)= &
+    hist_coarse(ipix)+hist_fine(i)
+
+enddo
+
+
+end subroutine downsample_hist
+
+subroutine free_odf_analysis(an)
+    implicit none
+    type(odf_level_analysis_type), intent(inout) :: an
+
+    if (allocated(an%maxima_pix))   deallocate(an%maxima_pix)
+    if (allocated(an%maxima_value)) deallocate(an%maxima_value)
+    if (allocated(an%basin_pix))    deallocate(an%basin_pix)
+    if (allocated(an%basin_counts)) deallocate(an%basin_counts)
+end subroutine free_odf_analysis
+
+subroutine free_odf_lib(odf_lib)
+    implicit none
+    type(odf_lib_type), intent(inout) :: odf_lib
+    integer :: iodf, iobj, ilevel
+
+    if (allocated(odf_lib%odf)) then
+        do iodf = 1, odf_lib%n_odf
+            if (allocated(odf_lib%odf(iodf)%hist)) deallocate(odf_lib%odf(iodf)%hist)
+            
+            if (allocated(odf_lib%odf(iodf)%analysis)) then
+                do iobj = 1, size(odf_lib%odf(iodf)%analysis, 1)
+                    do ilevel = 1, size(odf_lib%odf(iodf)%analysis, 2)
+                        call free_odf_analysis(odf_lib%odf(iodf)%analysis(iobj, ilevel))
+                    end do
+                end do
+                deallocate(odf_lib%odf(iodf)%analysis)
+            end if
+        end do
+        deallocate(odf_lib%odf)
+    end if
+
+    if (allocated(odf_lib%c2_symmetry)) deallocate(odf_lib%c2_symmetry)
+
+end subroutine free_odf_lib
+
+
+end module healpix_state_space_exploration

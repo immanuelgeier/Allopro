@@ -24,6 +24,7 @@ type :: raw_data_block
     integer :: end_time_step
 
     real, allocatable :: xyz(:,:,:)
+    real, allocatable :: boxl(:,:)
 
 end type
 
@@ -83,7 +84,9 @@ subroutine load_raw_data_block( &
     !pause
 
     allocate(block%xyz(3,natom,n_keep))
-    block%xyz=-42._8
+    allocate(block%boxl(3,n_keep))
+    block%xyz  =-42._8
+    block%boxl =-42._8
     
 
     block%natom = natom
@@ -112,15 +115,17 @@ subroutine load_raw_data_block( &
        n_keep=count(window_mask( nt_start:nt_end))
        
        
-       write(0,*) n_keep_sum+1,n_keep_sum+n_keep,'range',iseg
-        call load_segment( &
-            project, &
-            window, &
-            map, &
-            iseg, &
-            window_mask, &
-            block%xyz(:,:, &
-            n_keep_sum+1:n_keep_sum+n_keep ))
+      ! write(0,*) n_keep_sum+1,n_keep_sum+n_keep,'range',iseg
+call load_segment( &
+    project, &
+    window, &
+    map, &
+    iseg, &
+    window_mask, &
+    block%xyz(:,:, &
+        n_keep_sum+1:n_keep_sum+n_keep), &
+    block%boxl(:, &
+        n_keep_sum+1:n_keep_sum+n_keep))
             
 
             
@@ -140,7 +145,7 @@ subroutine load_segment( &
     map, &
     iseg, &
     window_mask, &
-    xyz)
+    xyz,boxl)
 
     type(project_type), intent(in) :: project
     type(window_map),   intent(in) :: map
@@ -151,6 +156,7 @@ subroutine load_segment( &
     logical, intent(in) :: window_mask(:)
 
     real, intent(inout) :: xyz(:,:,:)
+    real, intent(inout) :: boxl(:,:)
 
     logical, allocatable :: frame_to_keep(:)
 
@@ -190,7 +196,7 @@ subroutine load_segment( &
     call read_selected_frames( &
         reader, &
         frame_to_keep, &
-        xyz, &
+        xyz,boxl, &
         nread)
 
     !-----------------------------------------------------
@@ -218,7 +224,7 @@ end subroutine
 subroutine read_selected_frames( &
     reader, &
     frame_to_keep, &
-    xyz, &
+    xyz,boxl, &
     nread)
 
     type(adaptive_dcd_type), intent(inout) :: reader
@@ -226,7 +232,7 @@ subroutine read_selected_frames( &
     logical, intent(in) :: frame_to_keep(:)
 
     real, intent(inout) :: xyz(:,:,:)
-
+    real, intent(inout) :: boxl(:,:)
     integer, intent(out) :: nread
 
     integer :: iframe
@@ -234,7 +240,7 @@ subroutine read_selected_frames( &
 
     integer :: natom_read
 
-    real :: box
+    real(8) :: box(6)
 
     real, allocatable :: x(:)
     real, allocatable :: y(:)
@@ -254,7 +260,9 @@ subroutine read_selected_frames( &
         read(reader%unit) x
         read(reader%unit) y
         read(reader%unit) z
+        !write(0,*) box,'box'
         
+        !pause
         if (frame_to_keep(iframe)) then
         
             iframe_out = iframe_out + 1
@@ -262,8 +270,9 @@ subroutine read_selected_frames( &
             xyz(1,:,iframe_out) = x(1:natom_read)
             xyz(2,:,iframe_out) = y(1:natom_read)
             xyz(3,:,iframe_out) = z(1:natom_read)
-            !write(0,*) iframe,'frame_to_keep(iframe)',frame_to_keep(iframe),iframe_out
-            !write(0,*) x(1:5)
+            boxl(1,iframe_out) = real(box(1))
+            boxl(2,iframe_out) = real(box(3))
+            boxl(3,iframe_out) = real(box(6))
         end if
         
 

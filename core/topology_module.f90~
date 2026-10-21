@@ -45,10 +45,15 @@ end type topology_type
 type :: state_topology_type
 
 
-character(400) :: pdb_file = ''
+character(400) :: pdb_file    = ''
+character(400) :: domain_file = ''
+integer :: ndomain = 0
 
 type(topology_type) :: topo
+type(domain_type), allocatable :: domain(:)
 
+! residue -> domain map
+integer, allocatable :: domain_key(:)
 
 end type state_topology_type
 
@@ -65,7 +70,109 @@ type(state_topology_type), allocatable :: state(:)
 
 end type topology_set_type
 
+
+type :: domain_type
+
+character(40) :: name = ''
+
+    integer :: nres = 0
+    integer :: first_res = 0
+    integer :: last_res  = 0
+    integer :: first_atom = 0
+    integer :: last_atom  = 0
+integer, allocatable :: resid(:)
+
+end type domain_type
+
+
+
+
 contains
+
+subroutine read_domains(filename,state)
+
+implicit none
+
+character(*),intent(in) :: filename
+type(state_topology_type),intent(inout) :: state
+
+integer :: i,j
+integer :: first,last
+character(40) :: name
+
+open(10,file=filename,status='old',action='read')
+
+read(10,*) state%ndomain
+
+allocate(state%domain(state%ndomain))
+allocate(state%domain_key(state%topo%nres))
+
+state%domain_key = 0
+
+do i=1,state%ndomain
+
+   read(10,*) name, first, last
+
+   state%domain(i)%name      = trim(name)
+   state%domain(i)%first_res = first
+   state%domain(i)%last_res  = last
+   state%domain(i)%nres      = last-first+1
+
+   allocate(state%domain(i)%resid(state%domain(i)%nres))
+
+   do j=1,state%domain(i)%nres
+
+      state%domain(i)%resid(j) = first+j-1
+
+   end do
+
+   !----------------------------------------
+   ! residue -> domain map
+   !----------------------------------------
+   do j=1,state%topo%nres
+
+      if(state%topo%acid_number(state%topo%acid_start_list(j)) >= first .and. &
+         state%topo%acid_number(state%topo%acid_start_list(j)) <= last) then
+
+         state%domain_key(j)=i
+
+      end if
+
+   end do
+
+end do
+
+close(10)
+
+!----------------------------------------
+! determine atom ranges
+!----------------------------------------
+do i=1,state%ndomain
+
+   do j=1,state%topo%nres
+
+      if(state%topo%acid_number(state%topo%acid_start_list(j)) == &
+         state%domain(i)%first_res) then
+
+         state%domain(i)%first_atom = state%topo%acid_start_list(j)
+
+      end if
+
+      if(state%topo%acid_number(state%topo%acid_start_list(j)) == &
+         state%domain(i)%last_res) then
+
+         state%domain(i)%last_atom = &
+            state%topo%acid_start_list(j) + &
+            state%topo%acid_size(j) - 1
+
+      end if
+
+   end do
+
+end do
+
+end subroutine
+
 
 !====================================================
 ! ALLOCATE TOPOLOGY SET

@@ -12,8 +12,8 @@ implicit none
 
 integer,intent(in) :: n
 real(8)            :: d2(3)
-real(8),allocatable,intent(in)  :: ref(:,:)
-real(8),allocatable,intent(inout) :: cvec(:,:),cv_sym(:,:)
+real(8),allocatable,intent(in)  :: ref(:,:),cv_sym(:,:)
+real(8),allocatable,intent(out) :: cvec(:,:)
 
 real(8) :: cog(3), ri(3)
 real(8) :: c(n), c2(n)
@@ -28,25 +28,16 @@ integer ::  i, j
 logical :: use_ideal_sym
 
 do i=1,n
-
           c(i)  = cv_sym(1,i)
          c2(i)  = cv_sym(2,i)
-   ! c(order(i))  = cv_sym(1,i)
-   !c2(order(i))  = cv_sym(2,i)
-   !        c(i)  = cv_sym(1,order(i))
-   !       c2(i)  = cv_sym(2,order(i))
 end do
 
-! ----------------------------------------
-! CENTERING
-!! ----------------------------------------
+
 c  = c  - sum(c)/dble(n)
 c2 = c2 - sum(c2)/dble(n)
 
 
-! ----------------------------------------
-! RECONSTRUCTION CHECK
-! ----------------------------------------
+
 v1 = 0.d0
 v2 = 0.d0
 
@@ -75,6 +66,8 @@ c2=c2/sqrt(dot_product(v2,v2))
 ! ----------------------------------------
 ! OUTPUT
 ! ----------------------------------------
+if(allocated(cvec)) deallocate(cvec)
+allocate(cvec(2,n))	
 do i=1,n
    cvec(1,i) = c(i)
    cvec(2,i) = c2(i)
@@ -107,11 +100,13 @@ integer :: info, lwork, i, j
 !orthogonalisation of d2
 d2=d2_orig
 d2=d2-dot_product(d1,d2)/dot_product(d1,d1)*d1
-
-
+if(allocated(cvec)) deallocate(cvec)
+allocate( cvec(2,n))
 ! ----------------------------------------
 ! CENTROID
+	
 ! ----------------------------------------
+write(0,*) shape(ref)	,'shape'
 cog = sum(ref,2) / dble(n)
 
 ! ----------------------------------------
@@ -194,13 +189,26 @@ end do
 
 c=c/sqrt(dot_product(v1,v1))
 c2=c2/sqrt(dot_product(v2,v2))
-!write(0,*) 'v1',v1
-!write(0,*) 'v2',v2
+
+v1 = 0.d0
+v2 = 0.d0
+
+do i=1,n
+   ri = ref(:,i) - cog
+   v1 = v1 + c(i)*ri
+   v2 = v2 + c2(i)*ri
+end do
+
+!write(0,*) 'v1',v1,dot_product(v1,v1)
+!write(0,*) 'v2',v2,dot_product(v2,v2)
 !
-!write(0,*) 'd1',d1
-!write(0,*) 'd2',d2
+!write(0,*) 'd1',d1/sqrt(dot_product(d1,d1))
+!write(0,*) 'd2',d2/sqrt(dot_product(d2,d2))
 !
-write(0,*),'dot(v1,v2)',dot_product(v1,v2)
+!write(0,*) dot_product(d1/sqrt(dot_product(d1,d1)),v1)
+!write(0,*) dot_product(d2/sqrt(dot_product(d2,d2)),v2)
+!
+!write(0,*),'dot(v1,v2)',dot_product(v1,v2),n,S
 !pause      
 !write(0,*) 'c1',c
 !write(0,*) 'c2',c2
@@ -226,7 +234,7 @@ real(8) :: cog(3),c(n),c2(n),ri(3)
 real(8) :: v1(3), v2(3)
 
 cog=sum(ref,2)
-
+allocate( cvec(2,n))
 cog = cog / dble(n)
 
   do i=1,n

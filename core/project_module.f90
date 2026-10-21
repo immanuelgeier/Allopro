@@ -299,7 +299,82 @@ subroutine read_dcd_file_list(project,istate,irep)
 
 end subroutine read_dcd_file_list
 
+! =========================================================
+! WRITE PROJECT SUMMARY
+! =========================================================
+subroutine write_project_summary(filename, project)
 
+    implicit none
+    character(len=*), intent(in) :: filename
+    type(project_type), intent(in) :: project
+    
+    integer :: unit
+    integer :: ios
+    integer :: i, j, k
+
+    open(newunit=unit, file=trim(filename), status='replace', action='write', iostat=ios)
+    if (ios /= 0) then
+        write(0, '(A,A)') 'Error: Could not open summary file for writing: ', trim(filename)
+        error stop
+    end if
+
+    write(unit,*)
+    write(unit,*) '================================'
+    write(unit,*) 'PROJECT SUMMARY'
+    write(unit,*) '================================'
+
+    write(unit,*) 'states:', project%nstate
+
+    do i = 1, project%nstate
+        write(unit,*)
+        write(unit,*) 'state:', trim(project%state(i)%name)
+        write(unit,*) 'pdb  :', trim(project%state(i)%pdb_ref)
+        write(unit,*) 'domains :', trim(project%state(i)%domains_ref)
+        write(unit,*) 'replicates:', project%state(i)%nrep
+        
+        do j = 1, project%state(i)%nrep
+            
+            write(unit,*) '     rep', j
+            
+            do k = 1, min(3, project%state(i)%rep(j)%ndcd)
+                write(unit,*) '     number frames to ignore first per dcd' , project%state(i)%rep(j)%ignore_first_per_dcd(k), 'frames'
+                write(unit,*) '     number frames to ignore last per dcd ' , project%state(i)%rep(j)%ignore_last_per_dcd(k), 'frames'
+                write(unit,*) '     total number of frames per dcd'        , project%state(i)%rep(j)%nframes_per_dcd_raw(k)
+                write(unit,*) '     number frames to use per dcd:'          , project%state(i)%rep(j)%nframes_per_dcd_use(k)
+            end do
+            write(unit,*) '...'
+            
+            k = project%state(i)%rep(j)%ndcd
+            
+            write(unit,*) '     number frames to ignore first per dcd' , project%state(i)%rep(j)%ignore_first_per_dcd(k), 'frames'
+            write(unit,*) '     number frames to ignore last per dcd ' , project%state(i)%rep(j)%ignore_last_per_dcd(k), 'frames'
+            write(unit,*) '     total number of frames per dcd'        , project%state(i)%rep(j)%nframes_per_dcd_raw(k)
+            write(unit,*) '     number frames to use per dcd:'          , project%state(i)%rep(j)%nframes_per_dcd_use(k)
+            
+            write(unit,*) '     number of remaining frames per rep:'   , project%state(i)%rep(j)%nframes_per_rep_use
+            write(unit,*) '     dir :', trim(project%state(i)%rep(j)%dcd_dir)
+            write(unit,*) '     ndcd:', project%state(i)%rep(j)%ndcd
+            
+            do k = 1, min(3, project%state(i)%rep(j)%ndcd)
+                write(unit,*) 'file:', trim(project%state(i)%rep(j)%dcd_files(k))
+            end do
+            write(unit,*) '...'
+            write(unit,*) 'file:', trim(project%state(i)%rep(j)%dcd_files(project%state(i)%rep(j)%ndcd))
+            write(unit,*) 'consistent nframes across dcds in rep raw:', &
+                project%state(i)%rep(j)%consistent_nframes_across_rep_raw
+            write(unit,*) 'consistent nframes across dcds in rep to use:', &
+                project%state(i)%rep(j)%consistent_nframes_across_rep_use
+        end do
+
+        write(unit,*) 'consistent frames across reps in state to use:', &
+            project%state(i)%consistent_nframes_per_rep_across_state_use
+    end do
+
+    write(unit,*)
+
+    close(unit)
+
+end subroutine write_project_summary
 !=========================================================
 ! SUMMARY
 !=========================================================
@@ -405,7 +480,8 @@ subroutine analyze_project_frames(project)
             ref_nframes_dcd_use = -1
 
             do idcd = 1, project%state(istate)%rep(irep)%ndcd
-
+                 write(0,*) 'Analysing  ',trim(project%state(istate)%rep(irep)%dcd_files(idcd)),'atoms and frames:  ', &
+                    info
                 call read_dcd_header_info( &
                     project%state(istate)%rep(irep)%dcd_files(idcd), &
                     info )
@@ -429,8 +505,7 @@ subroutine analyze_project_frames(project)
                 ! RAW & USE consistency check within replicate
                 ! ----------------------------
                 if (idcd == 1) then
-                    ! FIX: Hier stand vorher fälschlicherweise das gesamte Array auf der linken Seite.
-                    ! Es muss spezifisch das Element (idcd) zugewiesen werden.
+                 
                     project%state(istate)%rep(irep)%nframes_per_dcd_raw(idcd) = &
                         info%nframes_dcd_found_in_dcd
 

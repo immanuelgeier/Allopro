@@ -133,6 +133,8 @@ subroutine initialize_system(project, topologies)
         
 
     end do
+    
+    call finalize_state_topology_domains(topologies)
 
     write(0,*)
     write(0,*) '==================================='
