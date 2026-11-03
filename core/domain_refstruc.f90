@@ -201,7 +201,7 @@ real(8) :: G(3,3)
 real(8) :: U(3,3), VT(3,3), S(3)
 real(8) :: work(100)
 
-real(8) :: x1(3), x2(3)
+real(8) :: x1(3), x2(3)!,v1(3),v2(3)
 real(8) :: tmp1(3), tmp2(3)
 
 integer :: info, lwork, i, j
@@ -210,11 +210,6 @@ logical :: use_axes
 if(allocated(cvec)) deallocate(cvec)
 allocate(cvec(2,n))
 
-!do i=1,n
-!write(0,*) ref(:,i)
-!end do
-!pause
-!orthogonalisation of d2
 
 ! ----------------------------------------
 ! CENTROID
@@ -257,13 +252,15 @@ if (use_axes) then
     ! Eigenvektoren des symmetrischen Gyrationstensors
     d1 = U(:,1)
     d2 = U(:,2)
-
+    d1=d1/norm2(d1)
+    d2=d2/norm2(d2)
 else
 
-    d1 = d1_orig
-    d2 = d2_orig
+    d1 = d1_orig/sqrt(dot_product(d1_orig,d1_orig))
+   
     d2 = d2-dot_product(d1,d2)/dot_product(d1,d1)*d1
-
+    
+    d2 = d2/norm2(d2)
 
 end if
 ! U^T d
@@ -288,6 +285,8 @@ x2 = matmul(transpose(VT), tmp2)
 ! ----------------------------------------
 ! PROJECT ON ATOMS
 ! ----------------------------------------
+
+
 do i=1,n
    ri = ref(:,i) - cog
 
@@ -295,19 +294,47 @@ do i=1,n
    c2(i) = dot_product(ri, x2)
 end do
 
+
 ! ----------------------------------------
 ! Numerical cleanup
 ! ----------------------------------------
 c  = c  - sum(c)/dble(n)
 c2 = c2 - sum(c2)/dble(n)
 
+v1=0._8
+v2=0._8
 
+do i=1,n
+   ri = ref(:,i) - cog
+   v1  = v1+ri*c(i)
+   v2  = v2+ri*c2(i)
+end do
+
+c =c /norm2(v1)
+c2=c2/norm2(v2)
 !---------------------------------
 do i=1,n
    cvec(1,i) = c(i)
    cvec(2,i) = c2(i)
 end do
 
+v1=0._8
+v2=0._8
+
+do i=1,n
+   ri = ref(:,i) - cog
+   v1  = v1+ri*c(i)
+   v2  = v2+ri*c2(i)
+end do
+
+write(0,*) norm2(v1), norm2(v2)
+write(0,*)  cvec(1,:),'cv weights'
+write(0,*)  cvec(2,:),'cv weights'
+!
+
+!cvec=cvec*5
+
+	
 end subroutine
 
 

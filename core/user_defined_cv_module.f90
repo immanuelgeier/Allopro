@@ -311,197 +311,209 @@ end subroutine get_user_cv_ref
     !=============================================================
     ! Bibliothek in Datei schreiben
     !=============================================================
-    subroutine write_user_cv_library(filename, lib)
-        character(*), intent(in) :: filename
-        type(user_cv_library_type), intent(in) :: lib
+subroutine write_user_cv_library(filename, lib)
+    character(*), intent(in) :: filename
+    type(user_cv_library_type), intent(in) :: lib
 
-        integer :: i, j, u, n
+    integer :: i, j, u, n
 
-        open(newunit=u, file=filename, status="replace", action="write")
+    open(newunit=u, file=filename, status="replace", action="write")
 
-        write(u, '(A,I0)') "NCVS ", lib%n_cvs
+    write(u, '(A,I0)') "NCVS ", lib%n_cvs
 
-        do i = 1, lib%n_cvs
+    do i = 1, lib%n_cvs
 
-            write(u,*)
-            write(u, '(A)') "USER_CV"
+        write(u,*)
+        write(u, '(A)') "USER_CV"
 
-            write(u, '(A,1X,A)') "NAME", trim(lib%cvs(i)%cv_name)
-            write(u, '(A,I0)') "ISTATE", lib%cvs(i)%istate
-            write(u, '(A,1X,A)') "REFERENCE_METHOD", trim(lib%cvs(i)%reference_method)
+        write(u, '(A,1X,A)') "NAME", trim(lib%cvs(i)%cv_name)
+        ! HIER FIX: 1X eingefügt, damit ein sauberes Leerzeichen entsteht ("ISTATE 1")
+        write(u, '(A,1X,I0)') "ISTATE", lib%cvs(i)%istate
+        write(u, '(A,1X,A)') "REFERENCE_METHOD", trim(lib%cvs(i)%reference_method)
 
-            if (trim(lib%cvs(i)%reference_method) == 'atom_pair') then
-                write(u, '(A,1X,I0,1X,I0)') "DIR1", lib%cvs(i)%dir1_atom_1, lib%cvs(i)%dir1_atom_2
-                write(u, '(A,1X,I0,1X,I0)') "DIR2", lib%cvs(i)%dir2_atom_1, lib%cvs(i)%dir2_atom_2
-            end if
+        if (trim(lib%cvs(i)%reference_method) == 'atom_pair') then
+            write(u, '(A,1X,I0,1X,I0)') "DIR1", lib%cvs(i)%dir1_atom_1, lib%cvs(i)%dir1_atom_2
+            write(u, '(A,1X,I0,1X,I0)') "DIR2", lib%cvs(i)%dir2_atom_1, lib%cvs(i)%dir2_atom_2
+        end if
 
-            write(u, '(A)') "ATOM_INDICES"
-            n = lib%cvs(i)%natom
-            write(u,*) n
-            if (n > 0 .and. allocated(lib%cvs(i)%atom_indices)) then
-                write(u,*) (lib%cvs(i)%atom_indices(j), j=1, n)
-            end if
+        write(u, '(A)') "ATOM_INDICES"
+        n = lib%cvs(i)%natom
+        write(u,*) n
+        if (n > 0 .and. allocated(lib%cvs(i)%atom_indices)) then
+            write(u,*) (lib%cvs(i)%atom_indices(j), j=1, n)
+        end if
 
-            if (allocated(lib%cvs(i)%ref_xyz)) then
-                write(u, '(A)') "REF_XYZ"
-                write(u,*) size(lib%cvs(i)%ref_xyz, 2)
-                do j = 1, size(lib%cvs(i)%ref_xyz, 2)
-                    write(u, '(3F24.16)') lib%cvs(i)%ref_xyz(:, j)
-                end do
-            end if
+        if (allocated(lib%cvs(i)%ref_xyz)) then
+            write(u, '(A)') "REF_XYZ"
+            write(u,*) size(lib%cvs(i)%ref_xyz, 2)
+            do j = 1, size(lib%cvs(i)%ref_xyz, 2)
+                write(u, '(3F24.16)') lib%cvs(i)%ref_xyz(:, j)
+            end do
+        end if
 
-            if (allocated(lib%cvs(i)%cv_values)) then
-                write(u, '(A)') "CV_VALUES"
-                write(u,*) size(lib%cvs(i)%cv_values, 2)
-                do j = 1, size(lib%cvs(i)%cv_values, 2)
-                    write(u, '(3F24.16)') lib%cvs(i)%cv_values(:, j)
-                end do
-            end if
+        if (allocated(lib%cvs(i)%cv_values)) then
+            write(u, '(A)') "CV_VALUES"
+            write(u,*) size(lib%cvs(i)%cv_values, 2)
+            do j = 1, size(lib%cvs(i)%cv_values, 2)
+                write(u, '(3F24.16)') lib%cvs(i)%cv_values(:, j)
+            end do
+        end if
 
-            write(u, '(A)') "END_USER_CV"
+        write(u, '(A)') "END_USER_CV"
 
-        end do
+    end do
 
-        close(u)
+    close(u)
 
-    end subroutine write_user_cv_library
+end subroutine write_user_cv_library
 
 
     !=============================================================
     ! Bibliothek aus Datei einlesen (inkl. automatischem Cleanup)
     !=============================================================
-!=============================================================
-    ! Bibliothek aus Datei einlesen (Fehlerfrei für Namen und Blöcke)
-    !=============================================================
-    subroutine read_user_cv_library(filename, lib)
-        character(*), intent(in) :: filename
-        type(user_cv_library_type), intent(inout) :: lib
+   !=============================================================
+subroutine read_user_cv_library(filename, lib)
+    character(*), intent(in) :: filename
+    type(user_cv_library_type), intent(inout) :: lib
 
-        integer :: u, ios, p
-        integer :: i, j, n, val
-        character(256) :: line
-        character(32) :: key
+    integer :: u, ios, p
+    integer :: i, j, n
+    character(256) :: line
+    character(32) :: key
 
-        ! 1. Zuerst sicherstellen, dass die Zielstruktur komplett sauber ist
-        call clear_user_cv_library(lib)
+    ! 1. Zuerst sicherstellen, dass die Zielstruktur komplett sauber ist
+    call clear_user_cv_library(lib)
 
-        open(newunit=u, file=filename, status="old", action="read", iostat=ios)
-        if (ios /= 0) then
-            error stop 'Error opening user CV library file.'
-        end if
+    open(newunit=u, file=filename, status="old", action="read", iostat=ios)
+    if (ios /= 0) then
+        error stop 'Error opening user CV library file.'
+    end if
 
-        ! Anzahl CVs einlesen
-        read(u, *, iostat=ios) key, lib%n_cvs
-        if (ios /= 0) then
-            lib%n_cvs = 0
-            close(u)
-            return
-        end if
-
-        if (lib%n_cvs > 0) then
-            if (allocated(lib%cvs)) deallocate(lib%cvs)
-            allocate(lib%cvs(lib%n_cvs))
-        end if
-
-        i = 0 ! Zähler für den aktuellen CV
-
-        do
-            read(u, '(A)', iostat=ios) line
-            if (ios /= 0) exit
-            line = adjustl(line)
-            if (len_trim(line) == 0) cycle
-
-            if (index(line, 'USER_CV') > 0) then
-                i = i + 1
-                if (i > lib%n_cvs) exit
-                ! Standardwerte für diesen CV setzen
-                lib%cvs(i)%active = .true.
-                lib%cvs(i)%cv_name = 'unnamed_cv'
-                lib%cvs(i)%istate = 1
-                lib%cvs(i)%reference_method = 'atom_pair'
-                lib%cvs(i)%natom = 0
-                lib%cvs(i)%dir1_atom_1 = 0
-                lib%cvs(i)%dir1_atom_2 = 0
-                lib%cvs(i)%dir2_atom_1 = 0
-                lib%cvs(i)%dir2_atom_2 = 0
-                cycle
-            end if
-
-            if (i < 1 .or. i > lib%n_cvs) cycle
-
-            if (index(line, 'NAME') > 0) then
-                ! Alles nach dem Keyword NAME herausschneiden
-                p = index(line, 'NAME') + 4
-                lib%cvs(i)%cv_name = trim(adjustl(line(p:)))
-                ! Anführungszeichen entfernen falls vorhanden
-                if (len_trim(lib%cvs(i)%cv_name) >= 2) then
-                    if (lib%cvs(i)%cv_name(1:1) == '"' .and. lib%cvs(i)%cv_name(len_trim(lib%cvs(i)%cv_name):len_trim(lib%cvs(i)%cv_name)) == '"') then
-                        lib%cvs(i)%cv_name = lib%cvs(i)%cv_name(2:len_trim(lib%cvs(i)%cv_name)-1)
-                    end if
-                end if
-
-            else if (index(line, 'ISTATE') > 0) then
-                read(line, *, iostat=ios) key, lib%cvs(i)%istate
-
-            else if (index(line, 'REFERENCE_METHOD') > 0) then
-                p = index(line, 'REFERENCE_METHOD') + 16
-                lib%cvs(i)%reference_method = trim(adjustl(line(p:)))
-
-            else if (index(line, 'DIR1') > 0) then
-                read(line, *, iostat=ios) key, lib%cvs(i)%dir1_atom_1, lib%cvs(i)%dir1_atom_2
-
-            else if (index(line, 'DIR2') > 0) then
-                read(line, *, iostat=ios) key, lib%cvs(i)%dir2_atom_1, lib%cvs(i)%dir2_atom_2
-
-            else if (index(line, 'ATOM_INDICES') > 0) then
-                read(u, *, iostat=ios) n
-                if (ios /= 0) n = 0
-                lib%cvs(i)%natom = n
-                if (n > 0) then
-                    if (allocated(lib%cvs(i)%atom_indices)) deallocate(lib%cvs(i)%atom_indices)
-                    allocate(lib%cvs(i)%atom_indices(n))
-                    lib%cvs(i)%atom_indices(:) = 0
-                    do j = 1, n
-                        read(u, *, iostat=ios) val
-                        if (ios == 0) then
-                            lib%cvs(i)%atom_indices(j) = val
-                        else
-                            exit
-                        end if
-                    end do
-                end if
-
-            else if (index(line, 'REF_XYZ') > 0) then
-                read(u, *, iostat=ios) n
-                if (n > 0) then
-                    if (allocated(lib%cvs(i)%ref_xyz)) deallocate(lib%cvs(i)%ref_xyz)
-                    allocate(lib%cvs(i)%ref_xyz(3, n))
-                    lib%cvs(i)%ref_xyz(:, :) = 0.0d0
-                    do j = 1, n
-                        read(u, *, iostat=ios) lib%cvs(i)%ref_xyz(:, j)
-                        if (ios /= 0) exit
-                    end do
-                end if
-
-            else if (index(line, 'CV_VALUES') > 0) then
-                read(u, *, iostat=ios) n
-                if (n > 0) then
-                    if (allocated(lib%cvs(i)%cv_values)) deallocate(lib%cvs(i)%cv_values)
-                    allocate(lib%cvs(i)%cv_values(2, n))
-                    lib%cvs(i)%cv_values(:, :) = 0.0d0
-                    do j = 1, n
-                        read(u, *, iostat=ios) lib%cvs(i)%cv_values(:, j)
-                        if (ios /= 0) exit
-                    end do
-                end if
-            end if
-
-        end do
-
+    ! Anzahl CVs einlesen
+    read(u, *, iostat=ios) key, lib%n_cvs
+    if (ios /= 0) then
+        lib%n_cvs = 0
         close(u)
+        return
+    end if
 
-    end subroutine read_user_cv_library
-    
+    if (lib%n_cvs > 0) then
+        if (allocated(lib%cvs)) deallocate(lib%cvs)
+        allocate(lib%cvs(lib%n_cvs))
+    end if
+
+    i = 0 ! Zähler für den aktuellen CV
+
+    do
+        read(u, '(A)', iostat=ios) line
+        if (ios /= 0) exit
+        line = adjustl(line)
+        if (len_trim(line) == 0) cycle
+
+        ! FIX: Exakter Vergleich, damit END_USER_CV nicht fälschlicherweise matcht!
+        if (trim(line) == 'USER_CV') then
+            i = i + 1
+            if (i > lib%n_cvs) exit
+            ! Standardwerte für diesen CV setzen
+            lib%cvs(i)%active = .true.
+            lib%cvs(i)%cv_name = 'unnamed_cv'
+            lib%cvs(i)%istate = 1
+            lib%cvs(i)%reference_method = 'atom_pair'
+            lib%cvs(i)%natom = 0
+            lib%cvs(i)%dir1_atom_1 = 0
+            lib%cvs(i)%dir1_atom_2 = 0
+            lib%cvs(i)%dir2_atom_1 = 0
+            lib%cvs(i)%dir2_atom_2 = 0
+            cycle
+        end if
+
+        if (i < 1 .or. i > lib%n_cvs) cycle
+
+        if (index(line, 'NAME') > 0) then
+            p = index(line, 'NAME') + 4
+            lib%cvs(i)%cv_name = trim(adjustl(line(p:)))
+            if (len_trim(lib%cvs(i)%cv_name) >= 2) then
+                if (lib%cvs(i)%cv_name(1:1) == '"' .and. lib%cvs(i)%cv_name(len_trim(lib%cvs(i)%cv_name):len_trim(lib%cvs(i)%cv_name)) == '"') then
+                    lib%cvs(i)%cv_name = lib%cvs(i)%cv_name(2:len_trim(lib%cvs(i)%cv_name)-1)
+                end if
+            end if
+
+        else if (index(line, 'ISTATE') > 0) then
+            p = index(line, 'ISTATE') + 6
+            read(line(p:), *, iostat=ios) lib%cvs(i)%istate
+            if (ios /= 0) lib%cvs(i)%istate = 1
+
+        else if (index(line, 'REFERENCE_METHOD') > 0) then
+            p = index(line, 'REFERENCE_METHOD') + 16
+            lib%cvs(i)%reference_method = trim(adjustl(line(p:)))
+
+        else if (index(line, 'DIR1') > 0) then
+            read(line, *, iostat=ios) key, lib%cvs(i)%dir1_atom_1, lib%cvs(i)%dir1_atom_2
+
+        else if (index(line, 'DIR2') > 0) then
+            read(line, *, iostat=ios) key, lib%cvs(i)%dir2_atom_1, lib%cvs(i)%dir2_atom_2
+
+        else if (index(line, 'ATOM_INDICES') > 0) then
+            ! Die Anzahl 'n' steht in der nächsten Zeile
+            read(u, *, iostat=ios) n
+            if (ios /= 0) n = 0
+            lib%cvs(i)%natom = n
+            
+            if (n > 0) then
+                if (allocated(lib%cvs(i)%atom_indices)) deallocate(lib%cvs(i)%atom_indices)
+                allocate(lib%cvs(i)%atom_indices(n))
+                lib%cvs(i)%atom_indices(:) = 0
+                
+                ! Direktes Einlesen in das alloziierte Array (funktioniert für Leerzeichen-getrennte Werte perfekt)
+                read(u, *, iostat=ios) lib%cvs(i)%atom_indices
+            end if
+
+        else if (index(line, 'REF_XYZ') > 0) then
+            read(u, *, iostat=ios) n
+            if (ios /= 0) n = 0
+            if (n > 0) then
+                if (allocated(lib%cvs(i)%ref_xyz)) deallocate(lib%cvs(i)%ref_xyz)
+                allocate(lib%cvs(i)%ref_xyz(3, n))
+                lib%cvs(i)%ref_xyz(:, :) = 0.0d0
+                do j = 1, n
+                    read(u, *, iostat=ios) lib%cvs(i)%ref_xyz(:, j)
+                    if (ios /= 0) exit
+                end do
+            end if
+
+        else if (index(line, 'CV_VALUES') > 0) then
+            read(u, *, iostat=ios) n
+            if (ios /= 0) n = 0
+            if (n > 0) then
+                if (allocated(lib%cvs(i)%cv_values)) deallocate(lib%cvs(i)%cv_values)
+                allocate(lib%cvs(i)%cv_values(2, n))
+                lib%cvs(i)%cv_values(:, :) = 0.0d0
+                do j = 1, n
+                    read(u, *, iostat=ios) lib%cvs(i)%cv_values(:, j)
+                    if (ios /= 0) exit
+                end do
+            end if
+        end if
+
+    end do
+
+    ! Nachträglicher Sicherheitscheck für CV_VALUES
+    do i = 1, lib%n_cvs
+        if (.not. allocated(lib%cvs(i)%cv_values)) then
+            if (lib%cvs(i)%natom > 0) then
+                allocate(lib%cvs(i)%cv_values(2, lib%cvs(i)%natom))
+            else
+                allocate(lib%cvs(i)%cv_values(2, 0))
+            end if
+            lib%cvs(i)%cv_values(:, :) = 0.0d0
+        end if
+    end do
+
+    close(u)
+
+end subroutine read_user_cv_library
+
+
     subroutine configure_user_cv_library(topologies)
     use topology_module, only: topology_set_type
     implicit none
@@ -522,18 +534,18 @@ end subroutine get_user_cv_ref
     call clear_user_cv_library(user_lib)
     call edit_user_cv_library(user_lib, topologies)
 
-    ! 2. Standard-Dateiname festlegen und abfragen
-    filename = 'user_cv_library.cfg'
+   !! 2. Standard-Dateiname festlegen und abfragen
+   !filename = 'user_cv_library.cfg'
+   !
+   !write(*,'(A,A,A)', advance='no') 'Save this library to file [', trim(filename), ']: '
+   !read(*,'(A)') input
+   !if (len_trim(input) > 0) then
+   !    filename = trim(input)
+   !end if
 
-    write(*,'(A,A,A)', advance='no') 'Save this library to file [', trim(filename), ']: '
-    read(*,'(A)') input
-    if (len_trim(input) > 0) then
-        filename = trim(input)
-    end if
-
-    ! 3. Abspeichern
-    call write_user_cv_library(trim(filename), user_lib)
-    write(*,'(3A)') '-> Successfully saved User CV library to "', trim(filename), '"'
+    !! 3. Abspeichern
+    !call write_user_cv_library(trim(filename), user_lib)
+    !write(*,'(3A)') '-> Successfully saved User CV library to "', trim(filename), '"'
 
 end subroutine configure_user_cv_library
     ! =============================================================

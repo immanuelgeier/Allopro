@@ -174,11 +174,7 @@ end subroutine lift_cv_plan_all
             end do
         end do
         
-        !! Rotationsmatrix-Speicher vorbereiten (3x3 pro Zeitschritt)
-        !allocate(lifted%rot_matrix(3, 3, lifted%ntimes))
-        !lifted%rot_matrix = 0.d0
-
-    end subroutine lift_cv_plan
+end subroutine lift_cv_plan
     
 subroutine lift_cv_plan_centroid(plan, block, lifted)
     type(cv_plan), intent(in)            :: plan

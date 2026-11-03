@@ -89,6 +89,7 @@ end type domain_type
 
 contains
 
+
 subroutine read_domains(filename,state)
 
 implicit none
@@ -358,5 +359,63 @@ call make_acid_start_list(topo)
 call make_residx(topo)
 
 end subroutine finalize_topology
+
+subroutine finalize_state_topology_domains(topologies)
+    implicit none
+
+    type(topology_set_type), intent(inout) :: topologies
+
+    integer :: istate, i, j, res, iatom
+    integer :: nres, first_res, last_res
+
+    ! Über alle States in der Topologiemenge iterieren
+    do istate = 1, topologies%nstate
+        nres = topologies%state(istate)%topo%nres
+
+        ! Residue -> Domain Map initialisieren
+        if (allocated(topologies%state(istate)%domain_key)) then
+            deallocate(topologies%state(istate)%domain_key)
+        end if
+        allocate(topologies%state(istate)%domain_key(nres))
+        topologies%state(istate)%domain_key = 0
+
+        ! Loop über alle Domänen des aktuellen States zur Bestimmung der Residuenbereiche und Atomgrenzen
+        do i = 1, topologies%state(istate)%ndomain
+            write(0,*) 'Finalizing Domain Topology [State ', istate, ']: ', topologies%state(istate)%domain(i)%name
+
+            first_res = topologies%state(istate)%domain(i)%first_res
+            last_res  = topologies%state(istate)%domain(i)%last_res
+           
+            topologies%state(istate)%domain(i)%nres = last_res - first_res + 1
+           
+            if (allocated(topologies%state(istate)%domain(i)%resid)) then
+                deallocate(topologies%state(istate)%domain(i)%resid)
+            end if
+            allocate(topologies%state(istate)%domain(i)%resid(topologies%state(istate)%domain(i)%nres))
+           
+            do j = 1, topologies%state(istate)%domain(i)%nres
+                topologies%state(istate)%domain(i)%resid(j) = first_res + j - 1
+            end do
+
+            ! domain_key füllen
+            do j = 1, topologies%state(istate)%domain(i)%nres
+                res = topologies%state(istate)%domain(i)%resid(j)
+                if (res >= 1 .and. res <= nres) then
+                    topologies%state(istate)%domain_key(res) = i
+                end if
+            end do
+
+            ! Atomgrenzen festlegen
+            first_res = topologies%state(istate)%domain(i)%resid(1)
+            last_res  = topologies%state(istate)%domain(i)%resid(topologies%state(istate)%domain(i)%nres)
+
+            topologies%state(istate)%domain(i)%first_atom = topologies%state(istate)%topo%acid_start_list(first_res)
+            topologies%state(istate)%domain(i)%last_atom  = topologies%state(istate)%topo%acid_start_list(last_res) + &
+                                                           topologies%state(istate)%topo%acid_size(last_res) - 1
+        end do
+    end do
+
+    write(0,*) 'All states topology domain finalization done'
+end subroutine finalize_state_topology_domains
 
 end module topology_module

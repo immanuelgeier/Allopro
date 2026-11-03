@@ -1,4 +1,5 @@
 module random_seed_workflow_module
+    use workflow_module, only: workflow_config_filename, seed_workflow_config_stem
 
     use random_seed_io_module, only: &
         random_seed_config_type, &
@@ -124,13 +125,9 @@ subroutine configure_seed_workflow(job)
 
         case ('y', 'Y', 'yes', 'YES')
 
-            write(*,'(A)', advance='no') &
-                'Configuration filename [seed_workflow.nml]: '
+            write(*,'(A)', advance='no') 'Workflow file prefix (blank for no prefix): '
             read(*,'(A)') filename
-
-            if (len_trim(filename) == 0) then
-                filename = 'seed_workflow.nml'
-            end if
+            filename = workflow_config_filename(trim(filename), seed_workflow_config_stem)
 
             call write_seed_workflow(trim(filename), job)
 

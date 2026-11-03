@@ -3,8 +3,17 @@ module lifting_plan_module
 use project_module
 use time_window_file_mapping
 use time_window_loader
+use iso_fortran_env, only: error_unit
 
 implicit  none
+private
+
+public :: lifting_plan_type
+public :: init_time_window_from_lifting_plan
+public :: init_lifting_plan_all
+public :: init_lifting_plan_state
+public :: write_lifting_plan
+public :: read_lifting_plan
 
 type :: lifting_plan_type
 
@@ -20,6 +29,131 @@ end type
 
 
 contains
+
+subroutine write_lifting_plan(lifting_plan, filename)
+   type(lifting_plan_type), intent(in) :: lifting_plan
+   character(len=*), intent(in) :: filename
+   integer :: unit, ios, nstates, nreplicas, nblocks, block_size
+
+   call validate_lifting_plan(lifting_plan)
+   nstates = size(lifting_plan%istates)
+   nreplicas = size(lifting_plan%ireps, 2)
+   nblocks = size(lifting_plan%start_block, 3)
+   block_size = size(lifting_plan%timestep_pattern, 1)
+
+   open(newunit=unit, file=trim(filename), status='replace', action='write', iostat=ios)
+   if (ios /= 0) then
+      write(error_unit, '(A,A)') 'Cannot write lifting plan file: ', trim(filename)
+      error stop 'Lifting plan output failed'
+   end if
+
+   write(unit, '(A)', iostat=ios) '# Lifting plan data'
+   if (ios == 0) write(unit, *, iostat=ios) 1, nstates, nreplicas, nblocks, block_size
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%istates
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%nreps
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%ireps
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%nblock
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%start_block
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%end_block
+   if (ios == 0) write(unit, *, iostat=ios) lifting_plan%timestep_pattern
+   if (ios /= 0) then
+      close(unit)
+      write(error_unit, '(A,A)') 'Error writing lifting plan file: ', trim(filename)
+      error stop 'Lifting plan output failed'
+   end if
+   close(unit, iostat=ios)
+   if (ios /= 0) error stop 'Error closing lifting plan file'
+end subroutine write_lifting_plan
+
+subroutine read_lifting_plan(lifting_plan, filename)
+   type(lifting_plan_type), intent(out) :: lifting_plan
+   character(len=*), intent(in) :: filename
+   integer :: unit, ios, format_version, nstates, nreplicas, nblocks, block_size
+   character(len=256) :: comment
+
+   open(newunit=unit, file=trim(filename), status='old', action='read', iostat=ios)
+   if (ios /= 0) then
+      write(error_unit, '(A,A)') 'Cannot read lifting plan file: ', trim(filename)
+      error stop 'Lifting plan input failed'
+   end if
+
+   read(unit, '(A)', iostat=ios) comment
+   if (ios /= 0) call lifting_plan_read_error(unit, 'Missing lifting plan header')
+   read(unit, *, iostat=ios) format_version, nstates, nreplicas, nblocks, block_size
+   if (ios /= 0) call lifting_plan_read_error(unit, 'Invalid lifting plan dimensions')
+   if (format_version /= 1) call lifting_plan_read_error(unit, 'Unsupported lifting plan format version')
+   if (nstates < 1 .or. nreplicas < 1 .or. nblocks < 0 .or. block_size < 1) then
+      call lifting_plan_read_error(unit, 'Invalid lifting plan dimensions')
+   end if
+
+   allocate(lifting_plan%istates(nstates), lifting_plan%nreps(nstates))
+   allocate(lifting_plan%ireps(nstates, nreplicas), lifting_plan%nblock(nstates, nreplicas))
+   allocate(lifting_plan%start_block(nstates, nreplicas, nblocks))
+   allocate(lifting_plan%end_block(nstates, nreplicas, nblocks))
+   allocate(lifting_plan%timestep_pattern(block_size, nstates, nreplicas, nblocks))
+
+   read(unit, *, iostat=ios) lifting_plan%istates
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%nreps
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%ireps
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%nblock
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%start_block
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%end_block
+   if (ios == 0) read(unit, *, iostat=ios) lifting_plan%timestep_pattern
+   if (ios /= 0) call lifting_plan_read_error(unit, 'Incomplete lifting plan data')
+   close(unit, iostat=ios)
+   if (ios /= 0) error stop 'Error closing lifting plan file'
+
+   call validate_lifting_plan(lifting_plan)
+end subroutine read_lifting_plan
+
+subroutine validate_lifting_plan(lifting_plan)
+   type(lifting_plan_type), intent(in) :: lifting_plan
+   integer :: nstates, nreplicas, nblocks, block_size
+
+   if (.not. allocated(lifting_plan%istates) .or. .not. allocated(lifting_plan%nreps) .or. &
+       .not. allocated(lifting_plan%ireps) .or. .not. allocated(lifting_plan%nblock) .or. &
+       .not. allocated(lifting_plan%start_block) .or. .not. allocated(lifting_plan%end_block) .or. &
+       .not. allocated(lifting_plan%timestep_pattern)) then
+      error stop 'Lifting plan is missing allocated arrays'
+   end if
+
+   nstates = size(lifting_plan%istates)
+   if (nstates < 1) error stop 'Lifting plan has no states'
+   if (size(lifting_plan%nreps) /= nstates) error stop 'Lifting plan state arrays have inconsistent sizes'
+   if (size(lifting_plan%ireps, 1) /= nstates .or. size(lifting_plan%nblock, 1) /= nstates .or. &
+       size(lifting_plan%start_block, 1) /= nstates .or. size(lifting_plan%end_block, 1) /= nstates .or. &
+       size(lifting_plan%timestep_pattern, 2) /= nstates) then
+      error stop 'Lifting plan arrays have inconsistent state dimensions'
+   end if
+   nreplicas = size(lifting_plan%ireps, 2)
+   if (nreplicas < 1 .or. size(lifting_plan%nblock, 2) /= nreplicas .or. &
+       size(lifting_plan%start_block, 2) /= nreplicas .or. &
+       size(lifting_plan%end_block, 2) /= nreplicas .or. &
+       size(lifting_plan%timestep_pattern, 3) /= nreplicas) then
+      error stop 'Lifting plan arrays have inconsistent replicate dimensions'
+   end if
+   nblocks = size(lifting_plan%start_block, 3)
+   if (size(lifting_plan%end_block, 3) /= nblocks .or. &
+       size(lifting_plan%timestep_pattern, 4) /= nblocks) then
+      error stop 'Lifting plan arrays have inconsistent block dimensions'
+   end if
+   block_size = size(lifting_plan%timestep_pattern, 1)
+   if (block_size < 1) error stop 'Lifting plan has an invalid block size'
+   if (any(lifting_plan%nreps < 0) .or. any(lifting_plan%nreps > nreplicas)) then
+      error stop 'Lifting plan has invalid replicate counts'
+   end if
+   if (any(lifting_plan%nblock < 0) .or. any(lifting_plan%nblock > nblocks)) then
+      error stop 'Lifting plan has invalid block counts'
+   end if
+end subroutine validate_lifting_plan
+
+subroutine lifting_plan_read_error(unit, message)
+   integer, intent(in) :: unit
+   character(len=*), intent(in) :: message
+   close(unit)
+   write(error_unit, '(A)') trim(message)
+   error stop 'Lifting plan input failed'
+end subroutine lifting_plan_read_error
 
 subroutine init_time_window_from_lifting_plan(lifting_plan,istate,irep,iblock,window,mask)
 integer,intent(in) :: istate,irep,iblock
@@ -169,9 +303,8 @@ subroutine init_lifting_plan_state(istate,lifting_plan,offset,stride,size_block,
    max_rep   = 0
    max_block = 0
    
-   if(istate>1 .or. istate > project%nstate) then
-   	   write(0,*) 'Invalid state number'
-   	   write(0,*) 'Valid states >= 1 <= ',project%nstate
+   if (istate < 1 .or. istate > project%nstate) then
+      error stop 'Invalid state number for lifting plan'
    end if
  
    do i=istate,istate
@@ -220,14 +353,14 @@ subroutine init_lifting_plan_state(istate,lifting_plan,offset,stride,size_block,
 
    do i=1,project%nstate
       lifting_plan%istates(i) = i
-      lifting_plan%nreps(i)   = project%state(i)%nrep
    enddo
+   lifting_plan%nreps(istate) = project%state(istate)%nrep
 
    !----------------------------------------
    ! fill block information
    !----------------------------------------
 
-   do i=1,project%nstate
+   do i=istate,istate
 
       do j=1,project%state(i)%nrep
 

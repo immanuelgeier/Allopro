@@ -1,5 +1,6 @@
 module healpix_sampling_plan_module
     use direction_vectors_analyse_plan_module ! Enthält project_type
+    use replicate_selector_workflow_module, only: replica_selector_type, init_replica_selector
     implicit none
     private
     
@@ -13,12 +14,6 @@ module healpix_sampling_plan_module
     ! ======================================================================
     ! NEU: SELEKTOR-TYP FÜR CROSS-VALIDATION UND SUBSET-ANALYSEN
     ! ======================================================================
-    type :: replica_selector_type
-        integer :: nrep_total
-        integer :: nrep_active
-        logical, allocatable :: is_active(:) ! Dimension: (nrep_total) -> .true. falls zu nutzen
-    end type replica_selector_type
-
     type :: block_meta
         integer :: replica_id      ! Aus welchem Replikat (1..nrep) stammt der Block
         integer :: start_frame     ! Globaler Startframe innerhalb des Replikats
@@ -39,26 +34,6 @@ module healpix_sampling_plan_module
 
 contains
 ! ======================================================================
-    ! INITIALISIERUNG DES REPLIKAT-WÄHLERS (Standard: Alle aktiv)
-    ! ======================================================================
-    subroutine init_replica_selector(selector, nrep_total)
-        type(replica_selector_type), intent(out) :: selector
-        integer, intent(in)                      :: nrep_total
-        
-        selector%nrep_total  = nrep_total
-        selector%nrep_active = nrep_total
-        
-        ! Falls die Maske bereits allokiert war (z.B. durch wiederholte Aufrufe), freigeben
-        if (allocated(selector%is_active)) deallocate(selector%is_active)
-        
-        allocate(selector%is_active(nrep_total))
-        
-        ! Standardmäßig sind alle Replikate für die Analyse aktiv geschaltet
-        selector%is_active = .true. 
-        
-    end subroutine init_replica_selector
-
-    ! ======================================================================
     ! HAUPTROUTINE: Erweitert um den replica_selector
     ! ======================================================================
     subroutine init_sampling_plan(plan, project, istate, L, mode, selector)

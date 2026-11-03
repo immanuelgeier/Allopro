@@ -33,6 +33,10 @@ use random_seed_workflow_module
 use trajectory_settings_module
 use euclidean_lifting_workflow_io_module
 use trajectory_workflow_io_module
+use test_trajectory_workflow_module
+use graphical_representation_workflow_io_module
+use replicate_selector_workflow_module
+
 implicit none
 
 type(project_type)           :: project
@@ -53,6 +57,9 @@ type(library_workflow_type)   :: cv_lib_workflow_use
 type(cv_plan_workflow_type)   :: cv_plan_workflow1
 type(euclidean_lifting_workflow_type):: euclidian_lifting_workflow
 type(trajectory_workflow_type) :: traj_workflow
+type(test_trajectory_workflow_type) :: write_test_tra
+type(graphical_representation_workflow_type) :: plot_vectors_vmd
+type(replicate_selector_workflow_type) :: replicate_selector_workflow
 !integer :: irep,istate
 
 logical :: found
@@ -65,8 +72,8 @@ logical :: run
 
 !call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
 !stop
-!call run_workflow_driver()
-call configure_cv_plan_workflow(cv_plan_workflow1)
+call run_workflow_driver()
+!call configure_cv_plan_workflow(cv_plan_workflow1)
 
 stop
 !call configure_sub_workflows()
@@ -131,7 +138,7 @@ write(0,*)!---------------------------------------------
 write(0,*) 'PRODUCTION CV-PLAN WORKFLOW CONFIGURATION '
 write(0,*)!-------------------- ------------------------ 
 
-call configure_cv_plan_workflow(cv_plan_workflow1)
+call configure_cv_plan_workflow(cv_plan_workflow1,topologies)
 
 
 
@@ -144,7 +151,7 @@ call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
 
 
 if(run) then
-call run_euclidean_lifting_workflow(euclidian_lifting_workflow, project, topologies, cv_plan1)	
+call run_euclidean_lifting_workflow(euclidian_lifting_workflow, project, topologies)
 end if
 
 
@@ -397,276 +404,976 @@ stop
 write(0,*) 'all done'
 contains
 
+
+subroutine run_graphical_representation_workflow(job,project,topologies)
+    use workflow_module, only: graphical_representation_workflow_type
+    use cv_plan_io_module, only: read_cv_plan
+    implicit none
+   
+    type(graphical_representation_workflow_type), intent(in) :: job
+    type(frame2plot) :: frame2pl
+    
+    
+    type(project_type)      ,intent(in):: project
+    type(topology_set_type) ,intent(in):: topologies
+    type(cv_plan)          :: plan
+    real(8)                :: scale
+    character(len=2048) :: outfile
+    character(len=2048) :: vmdfile
+
+    write(*,*)
+    write(*,*) '======================================'
+    write(*,*) '  Running Graphical Representation'
+    write(*,*) '======================================'
+
+    ! 1. Validierung vor dem Ausführen sicherstellen
+    call validate_graphical_representation_workflow(job)
+    
+    call read_cv_plan(plan,job%params%cv_plan_file)
+    
+    ! 2. Zeitpunkt / Zustand für den Frame setzen (gemäß deiner Vorgabe)
+    frame2pl%istate = job%params%state_index   ! 
+    frame2pl%irep   = job%params%replica_index ! Replikat-Index
+    frame2pl%itime  = job%params%time_index    ! Zeit-Index
+
+
+    scale      = job%params%scale            ! Skalierungsfaktor (Default = 1.0)
+    vmdfile    = job%params%tcl_script       ! TCL-Skript für VMD
+    outfile    = job%params%pdb_file 
+
+
+    write(*,*) '  -> State Index  : ', frame2pl%istate
+    write(*,*) '  -> Replica Index: ', frame2pl%irep
+    write(*,*) '  -> Time Index   : ', frame2pl%itime
+    write(*,*) '  -> Scale        : ', scale
+    write(*,*)
+
+    !
+     call get_pos_vecs_and_centroids(project, topologies, plan, frame2pl, scale, outfile, vmdfile)
+     
+    call destroy_cv_plan(plan) 
+     
+    write(*,*) 'Graphical representation workflow completed successfully.'
+
+end subroutine run_graphical_representation_workflow
+
+
+subroutine run_test_trajectory_workflow(job, project)
+    use test_trajectory_workflow_module
+    use cv_plan_io_module
+    use position_lift_module
+
+    implicit none
+
+    type(test_trajectory_workflow_type), intent(in) :: job
+   
+    type(time_window) :: window
+    type(raw_data_block) :: block
+    type(cv_plan) :: plan_to_test
+    type(project_type) :: project
+    type(lifted_trajectory) :: lifted     
+    logical, allocatable :: window_mask(:)
+    
+    integer :: ntstep, i, ios
+    
+    ! Platzhalter für die gelifteten Daten und das Centroid (entsprechend deiner Routinen anpassen)
+    ! type(lifted_data_type) :: lifted
+    ! type(centroid_type) :: centroid
+
+    write(*,*)
+    write(*,*) '======================================'
+    write(*,*) '    Running Test Trajectory Workflow'
+    write(*,*) '======================================'
+
+    ! ---------------------------------------------------------
+    ! 1. Zeitfenster für den Datenblock definieren & allokieren
+    ! ---------------------------------------------------------
+    window%istate          = job%istate
+    window%irep            = job%irep
+    window%start_time_step = job%start_time_step
+    window%end_time_step   = job%end_time_step
+
+    ntstep = window%end_time_step - window%start_time_step + 1
+    if (ntstep <= 0) then
+        error stop 'run_test_trajectory_workflow: Invalid time window range (end_time_step < start_time_step)'
+    end if
+
+    allocate(window_mask(ntstep))
+    window_mask = .true.
+
+    !  Stride auf die Maske anwenden, falls Schritte übersprungen werden sollen
+    if (job%stride > 1) then
+        do i = 1, ntstep
+            if (mod(i - 1, job%stride) /= 0) then
+                window_mask(i) = .false.
+            end if
+        end do
+    end if
+
+    write(*,'(A,I0,A,I0,A,I0,A,I0)') '-> Loading raw data block: istate=', window%istate, &
+               ', irep=', window%irep, ', steps [', window%start_time_step, ' : ', window%end_time_step, ']'
+
+    call load_raw_data_block(project, window, window_mask, block)
+
+    ! ---------------------------------------------------------
+    ! 2. CV Plan aus Datei einlesen
+    ! ---------------------------------------------------------
+    write(*,'(3A)') '-> Reading CV plan from "', trim(job%cv_plan_filename), '"...'
+    call read_cv_plan(plan_to_test, trim(job%cv_plan_filename))
+    write(*,*) '-> CV plan successfully loaded.'
+
+    ! ---------------------------------------------------------
+    ! 3. CV Plan "liften" (lift_cv_plan_all)
+    ! ---------------------------------------------------------
+    write(*,*) '-> Executing lift_cv_plan_all...'
+    
+    ! Aufruf deiner Lifting-Routine (Passe die Argumente 'lifted' und 'centroid' an deine Typen an)
+     call  lift_euclidian_cv_plan(plan_to_test, block, lifted)
+
+    ! ---------------------------------------------------------
+    ! 4. Trajektorie / Ergebnisse speichern
+    ! ---------------------------------------------------------
+    write(*,'(3A)') '-> Saving resulting trajectory to "', trim(job%test_trajectory_filename), '"...'
+    
+    ! Beispiel für das Schreiben der Ergebnisse in die Zieldatei:
+     call write_lifted_trajectory(trim(job%test_trajectory_filename), lifted)
+
+    write(*,*) 'Test trajectory workflow execution completed successfully.'
+
+    ! Aufräumen
+    if (allocated(window_mask)) deallocate(window_mask)
+    ! Falls plan%term / plan%object beim Einlesen alloziert wurden und hier freigegeben werden müssen:
+    ! if (allocated(plan%term)) deallocate(plan%term)
+    ! if (allocated(plan%object)) deallocate(plan%object)
+!call destroy_plan(plan_to_test)
+
+end subroutine run_test_trajectory_workflow
+
+subroutine write_lifted_trajectory(filename, lifted)
+    use iso_fortran_env, only: error_unit
+    implicit none
+
+    character(len=*), intent(in) :: filename
+    type(lifted_trajectory), intent(in) :: lifted
+
+    integer :: unit, ios, t, obj, idx
+    real(8), allocatable :: row_data(:)
+    character(len=32768) :: header_line
+    character(len=64)    :: temp_str
+
+    ! 1. Datei öffnen
+    open(newunit=unit, file=trim(filename), status='replace', action='write', iostat=ios)
+    if (ios /= 0) then
+        write(error_unit, '(A,A)') 'Cannot open trajectory output file for writing: ', trim(filename)
+        error stop
+    end if
+
+    ! 2. Header schreiben
+    write(unit, '(A)') '# Lifted trajectory data'
+    write(unit, '(A,I0)') '# Number of objects: ', lifted%nobject
+    write(unit, '(A,I0)') '# Number of time steps: ', lifted%ntimes
+
+    header_line = '# Col  1: TimeStep'
+    do obj = 1, lifted%nobject
+        write(temp_str, '(I0)') obj
+        header_line = trim(header_line) // ' | Obj_' // trim(temp_str) // &
+                      ' [b1_x b1_y b1_z b2_x b2_y b2_z Cent_x Cent_y Cent_z]'
+    end do
+    write(unit, '(A)') trim(header_line)
+
+    ! 3. Temporäres Array für eine Zeile allokieren (9 Werte pro Objekt)
+    allocate(row_data(9 * lifted%nobject))
+
+! 4. Daten zeilenweise über das temporäre Array schreiben
+    do t = 1, lifted%ntimes
+        do obj = 1, lifted%nobject
+            ! Startindex für dieses Objekt im Zeilen-Array berechnen
+            idx = (obj - 1) * 9 + 1
+            
+            ! b1 (3 Komponenten: x, y, z)
+            row_data(idx   : idx+2) = lifted%vec(:, 2*obj - 1, t)
+            !write(0,*) lifted%vec(:, 2*obj - 1, t)
+            !pause
+            ! b2 (3 Komponenten: x, y, z)
+            row_data(idx+3 : idx+5) = lifted%vec(:, 2*obj,     t)
+            
+            ! Centroid (3 Komponenten: x, y, z) -> Korrigiert auf 'obj' statt '2*obj - 1'
+            row_data(idx+6 : idx+8) = lifted%centroid(:, obj, t)
+        end do
+
+        ! Zeile sauber ausgeben: TimeStep gefolgt vom gesamten Zeilen-Array
+        write(unit, *) t, row_data
+    end do
+
+    ! 5. Aufräumen und schließen
+    deallocate(row_data)
+    close(unit, iostat=ios)
+end subroutine write_lifted_trajectory
+
+
+
+
+subroutine run_cv_plan_workflow(job, plan)
+    use sidechains 
+    use domains_module
+    use user_defined_cv_module
+    use cv_plan_io_module
+    implicit none
+
+    type(cv_plan_workflow_type), intent(in)    :: job
+    type(cv_plan),               intent(out)   :: plan
+
+    character(len=1024) :: filename
+    character(len=32)   :: names(2)
+    integer :: i, k, n, rid, ios, sc_mode, idx
+    logical :: include_it, type_include
+    integer, allocatable :: atoms(:)
+
+    ! Temporäre Bibliotheks-Objekte zum Auslesen der Daten
+    type(sidechain_library_type) :: sc_lib
+    type(domain_library_type)    :: dom_lib
+    type(user_cv_library_type)   :: user_lib
+
+    write(*,*)
+    write(*,*) '======================================'
+    write(*,*) '    Running CV Plan Workflow'
+    write(*,*) '======================================'
+
+    call print_cv_plan_workflow(job)
+    !pause
+    
+    if (job%read_existing_cv_plan) then
+        write(*,'(3A)') '-> Loading existing CV plan from "', trim(job%existing_cv_plan_filename), '"...'
+        call read_cv_plan(plan, trim(job%existing_cv_plan_filename))
+        write(*,*) '-> Existing CV plan successfully loaded.'
+        return
+    end if
+
+    ! ---------------------------------------------------------
+    ! 1. SIDECHAIN CVs verarbeiten (Unterstützt Typ- & Instanz-Filter)
+    ! ---------------------------------------------------------
+    if (job%include_sidechain_cvs .and. allocated(job%sidechain_libs)) then
+        write(*,*) 'Processing sidechain libraries...'
+        
+        do i = 1, size(job%sidechain_libs)
+            filename = job%sidechain_libs(i)%filename
+            sc_mode = job%sidechain_libs(i)%selection_mode
+            
+            call read_sidechain_library(trim(filename), sc_lib)
+            
+            if (allocated(sc_lib%residue)) then
+                idx = 0 ! Fortlaufender Index für Modus 4 (Instanz-Filter)
+                
+                do k = 1, sc_lib%ncv
+                    ! Standard-Typ-Filter für Modus 1, 2, 3
+                    type_include = .true.
+                    if (sc_mode /= 4 .and. allocated(job%sidechain_libs(i)%filters)) then
+                        if (k <= size(job%sidechain_libs(i)%filters)) then
+                            type_include = job%sidechain_libs(i)%filters(k)
+                        end if
+                    end if
+
+                    if (allocated(sc_lib%residue(k)%res_ids)) then
+                        do n = 1, size(sc_lib%residue(k)%res_ids)
+                            rid = sc_lib%residue(k)%res_ids(n)
+                            
+                            ! Wenn Modus 4 aktiv ist, prüfen wir den individuellen Instanz-Filter
+                            if (sc_mode == 4) then
+                                idx = idx + 1
+                                include_it = .true.
+                                if (allocated(job%sidechain_libs(i)%filters)) then
+                                    if (idx <= size(job%sidechain_libs(i)%filters)) then
+                                        include_it = job%sidechain_libs(i)%filters(idx)
+                                    end if
+                                end if
+                            else
+                                ! Für Modus 1-3 erbt die Instanz den Status des Residuen-Typs
+                                include_it = type_include
+                            end if
+
+                            if (include_it) then
+                                call make_cv_names(names, sc_lib%residue(k)%resname, rid)
+                                call get_atoms_sidechain(job%istate, sc_lib, topologies, k, n, atoms)
+                                call add_cv_pair_sidechain( &
+                                    plan         = plan, &
+                                    object_type  = 2, &  
+                                    resid        = rid, &
+                                    refid        = 0, &  
+                                    name         = names, &
+                                    point_group  = 'none', &  
+                                    atoms        = atoms, &
+                                    cv           = sc_lib%residue(k)%cv, &    
+                                    has_c2_sym   = sc_lib%residue(k)%has_sym &
+                                )
+                            end if
+                        end do
+                    end if
+                end do
+            end if
+
+            call clear_sidechain_library(sc_lib)
+        end do
+    end if
+
+    ! ---------------------------------------------------------
+    ! 2. DOMAIN CVs verarbeiten
+    ! ---------------------------------------------------------
+write(0,*) job%domain_libs(1)%filters
+
+!pause
+if (job%include_domain_cvs .and. allocated(job%domain_libs)) then
+        write(*,*) 'Processing domain libraries...'
+        write(*,*)  trim(filename)
+        do i = 1, size(job%domain_libs)
+            filename = job%domain_libs(i)%filename
+            
+            call read_domain_library(trim(filename), dom_lib)
+            
+            if (allocated(dom_lib%domain)) then
+                do k = 1, dom_lib%ndo
+                    include_it = .true.
+                    
+                    if (allocated(job%domain_libs(i)%filters)) then
+                        if (k <= size(job%domain_libs(i)%filters)) then
+                           
+                            include_it = job%domain_libs(i)%filters(k)
+                            write(0,*) 'Domain Index:', k, 'Name:', trim(dom_lib%domain(k)%domain_name), 'Filter-Val:', include_it
+                        end if
+                    end if
+
+                    if (include_it) then
+                        call make_domain_names(names, dom_lib%domain(k)%domain_name)
+                        call get_atoms_domaine(job%istate, dom_lib, topologies, k, atoms)
+                        call add_domain_cv_pair( &
+                            plan         = plan, &
+                            domid        = k, &
+                            name         = names, &
+                            point_group  = 'none', &
+                            atoms        = atoms, &
+                            cv           = dom_lib%domain(k)%cv &
+                        )
+                    end if
+                end do
+            end if
+
+            call clear_domain_library(dom_lib)
+        end do
+    end if
+    ! ---------------------------------------------------------
+    ! 3. USER-DEFINED CVs verarbeiten
+    ! ---------------------------------------------------------
+    if (job%include_user_cvs .and. allocated(job%user_libs)) then
+        write(*,*) 'Processing user-defined libraries...'
+        
+        do i = 1, size(job%user_libs)
+            filename = job%user_libs(i)%filename
+            
+            call read_user_cv_library(trim(filename), user_lib)
+            
+            if (user_lib%n_cvs > 0 .and. allocated(user_lib%cvs)) then
+                do k = 1, user_lib%n_cvs
+                    include_it = .true.
+                    if (allocated(job%user_libs(i)%filters)) then
+                        if (k <= size(job%user_libs(i)%filters)) then
+                            include_it = job%user_libs(i)%filters(k)
+                        end if
+                    end if
+
+                    if (include_it) then
+                        names(1) = trim(user_lib%cvs(k)%cv_name) // '_1'
+                        names(2) = trim(user_lib%cvs(k)%cv_name) // '_2'
+
+                        call add_user_cv_pair( &
+                            plan   = plan, &
+                            istate = user_lib%cvs(k)%istate, &
+                            name   = names, &
+                            atoms  = user_lib%cvs(k)%atom_indices, &
+                            cv     = user_lib%cvs(k)%cv_values       &
+                        )
+                    end if
+                end do
+            end if
+
+            call clear_user_cv_library(user_lib)
+        end do
+    end if
+
+    write(*,*) 'CV plan workflow execution completed successfully.'
+    if (.not. job%read_existing_cv_plan) then
+        write(*,*) 'Written CV plan to: ', trim(job%cv_plan_filename)
+        call write_cv_plan(plan, trim(job%cv_plan_filename))
+    end if
+
+end subroutine run_cv_plan_workflow
+
+
 subroutine configure_sub_workflows()
     use iso_fortran_env, only: output_unit, error_unit
     
     implicit none
 
     character(len=32) :: input
-    integer :: counter
-    logical :: continue_loop
+    integer :: choice, ios
+    logical :: running
 
-    ! --------------------------------------------------
-    ! 1. SEED WORKFLOWS SCHLEIFE
-    ! --------------------------------------------------
-    write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '       SEED WORKFLOW CONFIGURATION    '
-    write(output_unit, *) '======================================'
-    
-    counter = 0
-    continue_loop = .true.
+    running = .true.
 
-    do while (continue_loop)
-        counter = counter + 1
-        write(output_unit, '(A,I0)') '--- Configuring Seed Workflow #', counter
-        
-        ! Ruft die Routine auf, die intern auch das Speichern übernimmt
-        call configure_seed_workflow(initial_seed_workflow)
+    do while (running)
+        write(output_unit, *)
+        write(output_unit, *) '======================================'
+        write(output_unit, *) '      SUB-WORKFLOW CONFIGURATION MENU '
+        write(output_unit, *) '======================================'
+        write(output_unit, *) '1 = Configure Seed Workflow'
+        write(output_unit, *) '2 = Configure Trajectory Settings'
+        write(output_unit, *) '3 = Configure User-Defined CV Libraries'
+        write(output_unit, *) '4 = Configure CV-Library Workflow'
+        write(output_unit, *) '5 = Configure CV-Plan Workflow'
+        write(output_unit, *) '6 = Configure Test-CV-Trajectory Workflow'
+        write(output_unit, *) '7 = Configure Gaphical-Rep-VMD-CV Workflow'
+        write(output_unit, *) '8 = Configure Replicate Selector Workflow'
+        write(output_unit, *) '9 = Configure Euclidean Lifting Workflow'
+        write(output_unit, *) '0 = Return to Main Menu'
+        write(output_unit, *)
+        write(output_unit, '(A)', advance='no') 'Select option [0]: '
 
-        write(output_unit, '(A)', advance='no') 'Configure another Seed workflow? (y/n) [n]: '
         read(*,'(A)') input
-        if (len_trim(input) == 0) input = 'n'
-        input = trim(adjustl(input))
-        continue_loop = (input == 'y' .or. input == 'Y' .or. input == 'yes')
-    end do
+        if (len_trim(input) == 0) then
+            choice = 0
+        else
+            read(input, *, iostat=ios) choice
+            if (ios /= 0) then
+                write(error_unit, *) 'Invalid option. Please enter a number.'
+                cycle
+            end if
+        end if
 
+        select case (choice)
+        case (0)
+            running = .false.
+            write(output_unit, *) '-> Exiting sub-workflow menu and returning to main driver.'
 
-    ! --------------------------------------------------
-    ! 2. SYSTEM & PROJEKT INITIALISIERUNG
-    ! --------------------------------------------------
-    write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '     SYSTEM & PROJECT INITIALIZATION  '
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '-> Initializing topologies for librarys'
-    
-     call initialize_system(project, topologies)
-     call initialize_trajectory_settings(project, topologies)
-     !call analyze_project_frames(project)
-     !call print_project_summary(project)
-     !
-     !call init_resnames_and_sidechain_head_groups(sc_lib)
-     !call init_sidechain_head(sc_lib)
-     !
-     !call init_domain_maps(topologies%state(job%model_params%istate), dom_lib)
+        case (1)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '           SEED WORKFLOW CONFIGURATION            '
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_seed_workflow(initial_seed_workflow)
 
-     
-  write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '    USER CV LIBRARY CONFIGURATION     '
-    write(output_unit, *) '======================================'
+        case (2)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '         TRAJECTORY SETTINGS CONFIGURATION         '
+            write(output_unit, *) '--------------------------------------------------'
 
-    ! 1. Erstmal fragen, ob überhaupt User-CV-Libraries erstellt werden sollen
-    write(output_unit, '(A)', advance='no') 'Do you want to create user-defined CV libraries? (y/n) [n]: '
-    read(*,'(A)') input
-    if (len_trim(input) == 0) input = 'n'
-    input = trim(adjustl(input))
+            call configure_trajectory_workflow(traj_workflow,project,topologies)
+           
 
-    if (input == 'y' .or. input == 'Y' .or. input == 'yes') then
-        counter = 0
-        continue_loop = .true.
-
-        do while (continue_loop)
-            counter = counter + 1
-            write(output_unit, '(A,I0)') '--- Creating User CV Library Set #', counter
-            
-            ! Aufruf deiner Routine
+        case (3)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '        USER CV LIBRARY CONFIGURATION             '
+            write(output_unit, *) '--------------------------------------------------'
             call configure_user_cv_library(topologies)
+
+        case (4)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       CV-LIBRARY WORKFLOW CONFIGURATION          '
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_library_workflow(cv_lib_workflow_use, topologies)
+
+        case (5)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '        CV-PLAN WORKFLOW CONFIGURATION            '
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_cv_plan_workflow(cv_plan_workflow1,topologies)
             
-            write(output_unit, '(A)', advance='no') 'Create another set of user CV libraries? (y/n) [n]: '
-            read(*,'(A)') input
-            if (len_trim(input) == 0) input = 'n'
-            input = trim(adjustl(input))
-            continue_loop = (input == 'y' .or. input == 'Y' .or. input == 'yes')
-        end do
-    else
-        write(output_unit, *) '-> Skipping User CV libraries creation.'
-    end if
-
-    ! --------------------------------------------------
-    ! 3. CV-LIBRARY WORKFLOWS SCHLEIFE
-    ! --------------------------------------------------
-    write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '    CV-LIBRARY WORKFLOW CONFIGURATION '
-    write(output_unit, *) '======================================'
-    
-    counter = 0
-    continue_loop = .true.
-
-    do while (continue_loop)
-        counter = counter + 1
-        write(output_unit, '(A,I0)') '--- Configuring CV-Library Workflow #', counter
+            
+        case(6)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '        TEST CV TRAJECTORY WORKFLOW CONFIGURATION            '
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_test_trajectory_workflow(write_test_tra)
         
-        call configure_library_workflow(cv_lib_workflow_use, topologies)
+         case(7)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '        GRAPHICAL REP VMD WORKFLOW CONFIGURATION            '
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_graphical_representation_workflow(plot_vectors_vmd)
 
-        write(output_unit, '(A)', advance='no') 'Configure another CV-Library workflow? (y/n) [n]: '
-        read(*,'(A)') input
-        if (len_trim(input) == 0) input = 'n'
-        input = trim(adjustl(input))
-        continue_loop = (input == 'y' .or. input == 'Y' .or. input == 'yes')
-    end do
+         case (8)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       REPLICATE SELECTOR WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_replicate_selector_workflow(replicate_selector_workflow, project)
 
+         case (9)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       EUCLIDEAN LIFTING WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
 
-    ! --------------------------------------------------
-    ! 4. CV-PLAN WORKFLOWS SCHLEIFE
-    ! --------------------------------------------------
-    write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '    CV-PLAN WORKFLOW CONFIGURATION    '
-    write(output_unit, *) '======================================'
-    
-    counter = 0
-    continue_loop = .true.
-
-    do while (continue_loop)
-        counter = counter + 1
-        write(output_unit, '(A,I0)') '--- Configuring CV-Plan Workflow #', counter
-        
-         call configure_cv_plan_workflow(cv_plan_workflow1)
-
-        write(output_unit, '(A)', advance='no') 'Configure another CV-Plan workflow? (y/n) [n]: '
-        read(*,'(A)') input
-        if (len_trim(input) == 0) input = 'n'
-        input = trim(adjustl(input))
-        continue_loop = (input == 'y' .or. input == 'Y' .or. input == 'yes')
+         case default
+         end select
     end do
 
     write(output_unit, *) '-> All interactive sub-workflow configurations completed.'
 end subroutine configure_sub_workflows
 
+
+
 subroutine run_workflow_driver()
     use iso_fortran_env, only: output_unit, error_unit
-    use master_workflow_io_module
-    use random_seed_workflow_module, only: random_seed_workflow_type, read_seed_workflow, run_seed_workflow
-    use trajectory_workflow_io_module, only: trajectory_workflow_type, read_trajectory_workflow, run_trajectory_workflow
-    use cv_lib_workflow_io_module ! Angenommen, hier liegt der Library-Workflow
+    use master_workflow_io_module, only: master_workflow_type, configure_master_workflow
     implicit none
 
     character(len=1024) :: input
     character(len=1024) :: master_cfg_filename
     integer :: main_choice, ios
     type(master_workflow_type) :: master
-    integer :: i
-    logical :: config_exists
+    character(len=1024) :: master_stack(64)
+    character(len=1024) :: generated_selector_files(256)
+    integer :: generated_selector_count
+    logical :: running
 
-    ! --- HAUPTMENÜ ANZEIGEN ---
-    write(output_unit, *)
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '    PROTEIN WORKFLOW DRIVER SYSTEM    '
-    write(output_unit, *) '======================================'
-    write(output_unit, *) '1 = Configure sub-workflows interactively'
-    write(output_unit, *) '2 = Configure master workflow only (using existing configs)'
-    write(output_unit, *) '3 = Validate, Dry-Run and Execute master workflow (Batch)'
-    write(output_unit, *)
-    write(output_unit, '(A)', advance='no') 'Select option [3]: '
-    
-    read(*,'(A)') input
-    main_choice = 3
-    if (len_trim(input) > 0) then
-        read(input,*,iostat=ios) main_choice
-        if (ios /= 0) error stop 'Invalid main option selected'
-    end if
+    ! Initialize project and topologies once, before entering the menu loop.
+    call initialize_system(project, topologies)
 
-    ! --- AUSWAHL VERARBEITEN ---
-    select case (main_choice)
+    running = .true.
+    do while (running)
+        write(output_unit, *)
+        write(output_unit, *) '======================================'
+        write(output_unit, *) '    PROTEIN WORKFLOW DRIVER SYSTEM    '
+        write(output_unit, *) '======================================'
+        write(output_unit, *) '1 = Configure sub-workflows interactively'
+        write(output_unit, *) '2 = Configure master workflow only (using existing configs)'
+        write(output_unit, *) '3 = Validate, Dry-Run and Execute master workflow (Batch)'
+        write(output_unit, *) '4 = Quit'
+        write(output_unit, *)
+        write(output_unit, '(A)', advance='no') 'Select option [3]: '
 
-    case (1)
-        write(output_unit, *) '-> Entering Sub-Workflow Configuration Mode...'
-        call configure_sub_workflows()
-
-    case (2)
-        write(output_unit, *) '-> Entering Master-Workflow Configuration Mode...'
-        call configure_master_workflow(master)
-        write(output_unit, *) 'Master protocol configuration completed.'
-
-case (3)
-        write(output_unit, *) '-> Entering Master Execution Mode...'
-        
-        ! Master-Protokoll Dateinamen interaktiv abfragen
-        write(output_unit, '(A)', advance='no') 'Master protocol filename to execute [master_workflow.cfg]: '
         read(*,'(A)') input
-        if (len_trim(input) == 0) then
-            master_cfg_filename = 'master_workflow.cfg'
-        else
-            master_cfg_filename = trim(adjustl(input))
+        main_choice = 3
+        if (len_trim(input) > 0) then
+            read(input,*,iostat=ios) main_choice
+            if (ios /= 0) then
+                write(error_unit, '(A)') 'Invalid main option. Please enter a number from 1 to 4.'
+                cycle
+            end if
         end if
 
-        ! 0. Projekt und Topologien einmalig initialisieren, damit nstate/nrep bekannt sind
-        call initialize_system(project, topologies)
+        select case (main_choice)
 
-        ! 1. Master-Protokoll einlesen
-        call read_master_workflow(master, trim(master_cfg_filename))
+        case (1)
+            write(output_unit, *) '-> Entering Sub-Workflow Configuration Mode...'
+            call configure_sub_workflows()
 
-        ! 2. Dry-Run / Konsistenzprüfung (Prüfung aller Config-Dateien)
-        write(output_unit, *) '-> Running Dry-Run consistency check...'
-        do i = 1, master%n_steps
-            inquire(file=trim(master%steps(i)%config_file), exist=config_exists)
-            if (.not. config_exists) then
-                write(error_unit, '(3A)') 'ERROR: Configuration file "', trim(master%steps(i)%config_file), '" was not found!'
-                error stop 'Dry-run failed due to missing configuration files.'
+        case (2)
+            write(output_unit, *) '-> Entering Master-Workflow Configuration Mode...'
+            call configure_master_workflow(master)
+            write(output_unit, *) 'Master protocol configuration completed.'
+
+        case (3)
+            write(output_unit, *) '-> Entering Master Execution Mode...'
+
+            write(output_unit, '(A)', advance='no') &
+                'Master protocol filename to execute [master_workflow.cfg]: '
+            read(*,'(A)') input
+            if (len_trim(input) == 0) then
+                master_cfg_filename = 'master_workflow.cfg'
+            else
+                master_cfg_filename = trim(adjustl(input))
             end if
-        end do
-        write(output_unit, *) '-> Dry-run passed successfully! All configuration files are present.'
 
-        ! 3. Ausführungs-Loop über die numerischen IDs (ohne die Master-Datei zu überschreiben)
-        write(output_unit, *) '-> Starting Execution Loop...'
-        do i = 1, master%n_steps
-            write(output_unit, '(3A)') '>>> Executing Step: ', trim(master%steps(i)%step_name), ' ...'
+            write(output_unit, *) '-> Running Dry-Run consistency check...'
+            master_stack = ''
+            generated_selector_files = ''
+            generated_selector_count = 0
+            call validate_master_tree(trim(master_cfg_filename), master_stack, 0, &
+                generated_selector_files, generated_selector_count)
+            write(output_unit, *) '-> Dry-run passed successfully! All configuration files are present.'
 
-            ! Sauberer Dispatch über die eindeutige numerische ID
-            select case (master%steps(i)%step_type)
-            
-            case (1) ! seed
-                block
-                    type(random_seed_workflow_type) :: seed_job
-                    call read_seed_workflow(trim(master%steps(i)%config_file), seed_job)
-                    call run_seed_workflow(seed_job)
-                end block
+            write(output_unit, *) '-> Starting Execution Loop...'
+            master_stack = ''
+            call execute_master_tree(trim(master_cfg_filename), master_stack, 0)
+            write(output_unit, *) 'All workflow steps completed successfully!'
 
-            case (2) ! traj_settings
-                block
-                    type(trajectory_workflow_type) :: traj_job
-                    
-                    call read_trajectory_workflow(traj_job, trim(master%steps(i)%config_file))
-                    call run_trajectory_workflow(traj_job, project,topologies)
-                end block
+        case (4)
+            running = .false.
+            write(output_unit, *) 'Exiting workflow driver.'
 
-            case (3) ! cv_lib
-                block
-                    type(library_workflow_type) :: cv_job
-                    call read_library_workflow(cv_job, trim(master%steps(i)%config_file))
-                    call validate_library_workflow(cv_job)
-                    call run_library_workflow(cv_job, topologies, sc_lib, dom_lib, user_lib)
-                end block
-
-            case (4) ! cv_plan
-                block
-                    ! Hier den passenden Aufruf für cv_plan / lifting einsetzen
-                end block
-
-            case (5) ! lifting
-                block
-                    ! Entsprechender Workflow-Aufruf für lifting
-                end block
-
-            case default
-                write(error_unit, '(A,I0)') 'ERROR: Unknown workflow step type ID: ', master%steps(i)%step_type
-                error stop 'Execution failed due to unknown step type.'
-            end select
-
-            write(output_unit, '(3A)') '<<< Finished Step: ', trim(master%steps(i)%step_name), ' [DONE]'
-        end do
-
-        write(output_unit, *) 'All workflow steps completed successfully!'
-        
-        
-    case default
-        error stop 'Invalid option selected in workflow driver.'
-
-    end select
+        case default
+            write(output_unit, '(A,I0)') 'Invalid main option: ', main_choice
+        end select
+    end do
 end subroutine run_workflow_driver
+
+recursive subroutine validate_master_tree(master_filename, master_stack, depth, &
+    generated_selector_files, generated_selector_count)
+    use iso_fortran_env, only: error_unit
+    use master_workflow_io_module, only: master_workflow_type, read_master_workflow, &
+        validate_master_workflow, master_workflow_step_type_id, replicate_selector_workflow_step_type_id, &
+        euclidean_lifting_workflow_step_type_id
+    use replicate_selector_workflow_module, only: replicate_selector_workflow_type, &
+        read_replicate_selector_workflow, validate_replicate_selector_workflow
+    use euclidean_lifting_workflow_io_module, only: read_euclidean_lifting_workflow, &
+        validate_euclidean_lifting_workflow
+    implicit none
+
+    character(len=*), intent(in) :: master_filename
+    character(len=1024), intent(in) :: master_stack(:)
+    integer, intent(in) :: depth
+    character(len=1024), intent(inout) :: generated_selector_files(:)
+    integer, intent(inout) :: generated_selector_count
+
+    type(master_workflow_type) :: master
+    character(len=1024) :: current_master, step_config, next_master_stack(size(master_stack))
+    character(len=1024) :: selector_output
+    integer :: i, generated_index
+    logical :: file_exists, selector_will_be_generated
+
+    current_master = normalize_workflow_path(master_filename)
+    if (depth >= size(master_stack)) then
+        write(error_unit, '(A)') 'ERROR: Maximum nested master workflow depth exceeded.'
+        error stop 'Master workflow nesting is too deep.'
+    end if
+    do i = 1, depth
+        if (trim(master_stack(i)) == trim(current_master)) then
+            write(error_unit, '(A,A)') 'ERROR: Circular master workflow reference: ', trim(current_master)
+            error stop 'Circular master workflow reference.'
+        end if
+    end do
+    inquire(file=trim(current_master), exist=file_exists)
+    if (.not. file_exists) then
+        write(error_unit, '(A,A)') 'ERROR: Master workflow file not found: ', trim(current_master)
+        error stop 'Missing master workflow file.'
+    end if
+
+    next_master_stack = master_stack
+    next_master_stack(depth + 1) = current_master
+    call read_master_workflow(master, trim(current_master))
+    call validate_master_workflow(master)
+
+    do i = 1, master%n_steps
+        if (master%steps(i)%step_type < 1 .or. &
+            master%steps(i)%step_type > euclidean_lifting_workflow_step_type_id) then
+            write(error_unit, '(A,I0,A,A)') 'ERROR: Unknown workflow step type ', &
+                master%steps(i)%step_type, ' in ', trim(current_master)
+            error stop 'Unknown workflow step type.'
+        end if
+
+        step_config = resolve_master_step_path(current_master, trim(master%steps(i)%config_file))
+        inquire(file=trim(step_config), exist=file_exists)
+        if (.not. file_exists) then
+            write(error_unit, '(A,A,A,A,A)') 'ERROR: Configuration file "', trim(step_config), &
+                '" referenced by "', trim(current_master), '" was not found.'
+            error stop 'Dry-run failed due to missing configuration files.'
+        end if
+
+        if (master%steps(i)%step_type == master_workflow_step_type_id) then
+            call validate_master_tree(trim(step_config), next_master_stack, depth + 1, &
+                generated_selector_files, generated_selector_count)
+        else if (master%steps(i)%step_type == replicate_selector_workflow_step_type_id) then
+            block
+                type(replicate_selector_workflow_type) :: selector_job
+                call read_replicate_selector_workflow(trim(step_config), selector_job)
+                call validate_replicate_selector_workflow(selector_job, project)
+                selector_output = resolve_master_step_path(step_config, trim(selector_job%selector_file))
+                if (generated_selector_count >= size(generated_selector_files)) then
+                    error stop 'Too many replicate selector outputs in master workflow.'
+                end if
+                generated_selector_count = generated_selector_count + 1
+                generated_selector_files(generated_selector_count) = selector_output
+            end block
+        else if (master%steps(i)%step_type == euclidean_lifting_workflow_step_type_id) then
+            block
+                type(euclidean_lifting_workflow_type) :: lifting_job
+                character(len=1024) :: data_file
+                logical :: data_file_exists
+
+                call read_euclidean_lifting_workflow(lifting_job, trim(step_config))
+                call validate_euclidean_lifting_workflow(lifting_job)
+                if (lifting_job%run_params%execute_lifting) then
+                    data_file = resolve_master_step_path(step_config, &
+                        trim(lifting_job%io_params%cv_plan_filename))
+                    inquire(file=trim(data_file), exist=data_file_exists)
+                    if (.not. data_file_exists) then
+                        write(error_unit, '(A,A)') 'ERROR: CV plan file not found: ', trim(data_file)
+                        error stop 'Dry-run failed due to missing CV plan file.'
+                    end if
+                    data_file = resolve_master_step_path(step_config, &
+                        trim(lifting_job%io_params%selector_file))
+                    inquire(file=trim(data_file), exist=data_file_exists)
+                    selector_will_be_generated = .false.
+                    do generated_index = 1, generated_selector_count
+                        if (trim(generated_selector_files(generated_index)) == trim(data_file)) then
+                            selector_will_be_generated = .true.
+                            exit
+                        end if
+                    end do
+                    if (.not. data_file_exists .and. .not. selector_will_be_generated) then
+                        write(error_unit, '(A,A)') 'ERROR: Replicate selector file not found: ', trim(data_file)
+                        error stop 'Dry-run failed due to missing replicate selector file.'
+                    end if
+                end if
+            end block
+        end if
+    end do
+end subroutine validate_master_tree
+
+recursive subroutine execute_master_tree(master_filename, master_stack, depth)
+    use iso_fortran_env, only: output_unit, error_unit
+    use master_workflow_io_module, only: master_workflow_type, read_master_workflow, &
+        validate_master_workflow, master_workflow_step_type_id, replicate_selector_workflow_step_type_id, &
+        euclidean_lifting_workflow_step_type_id
+    use random_seed_workflow_module, only: random_seed_workflow_type, read_seed_workflow, run_seed_workflow
+    use trajectory_workflow_io_module, only: trajectory_workflow_type, read_trajectory_workflow, &
+        run_trajectory_workflow
+    use cv_lib_workflow_io_module, only: read_library_workflow, validate_library_workflow
+    use replicate_selector_workflow_module, only: replicate_selector_workflow_type, &
+        read_replicate_selector_workflow, validate_replicate_selector_workflow, &
+        run_replicate_selector_workflow
+    use replicate_selector_workflow_module, only: replica_selector_type
+    implicit none
+
+    character(len=*), intent(in) :: master_filename
+    character(len=1024), intent(in) :: master_stack(:)
+    integer, intent(in) :: depth
+
+    type(master_workflow_type) :: master
+    character(len=1024) :: current_master, step_config, next_master_stack(size(master_stack))
+    integer :: i
+
+    current_master = normalize_workflow_path(master_filename)
+    if (depth >= size(master_stack)) then
+        write(error_unit, '(A)') 'ERROR: Maximum nested master workflow depth exceeded.'
+        error stop 'Master workflow nesting is too deep.'
+    end if
+    do i = 1, depth
+        if (trim(master_stack(i)) == trim(current_master)) then
+            write(error_unit, '(A,A)') 'ERROR: Circular master workflow reference: ', trim(current_master)
+            error stop 'Circular master workflow reference.'
+        end if
+    end do
+
+    next_master_stack = master_stack
+    next_master_stack(depth + 1) = current_master
+    call read_master_workflow(master, trim(current_master))
+    call validate_master_workflow(master)
+
+    do i = 1, master%n_steps
+        step_config = resolve_master_step_path(current_master, trim(master%steps(i)%config_file))
+        write(output_unit, '(A,A,A,I0,A)') '>>> Executing Step: ', trim(master%steps(i)%step_name), &
+            ' [type ', master%steps(i)%step_type, ']'
+
+        select case (master%steps(i)%step_type)
+        case (1)
+            block
+                type(random_seed_workflow_type) :: seed_job
+                call read_seed_workflow(trim(step_config), seed_job)
+                call run_seed_workflow(seed_job)
+            end block
+
+        case (2)
+            block
+                type(trajectory_workflow_type) :: traj_job
+                call read_trajectory_workflow(traj_job, trim(step_config))
+                call run_trajectory_workflow(traj_job, project, topologies)
+            end block
+
+        case (3)
+            block
+                type(library_workflow_type) :: cv_job
+                call read_library_workflow(cv_job, trim(step_config))
+                call validate_library_workflow(cv_job)
+                call run_library_workflow(cv_job, topologies, sc_lib, dom_lib, user_lib)
+            end block
+
+        case (4)
+            block
+                type(cv_plan_workflow_type) :: cv_plan_job
+                type(cv_plan) :: generated_plan
+                call read_cv_plan_workflow(cv_plan_job, trim(step_config))
+                call run_cv_plan_workflow(cv_plan_job, generated_plan)
+                write(output_unit, *) '-> CV Plan successfully generated from workflow.'
+            end block
+
+        case (5)
+            block
+                type(test_trajectory_workflow_type) :: test_job
+                call read_test_trajectory_workflow(test_job, trim(step_config))
+                call run_test_trajectory_workflow(test_job, project)
+            end block
+
+        case (6)
+            block
+                type(graphical_representation_workflow_type) :: graphical_job
+                call read_graphical_representation_workflow(graphical_job, trim(step_config))
+                call run_graphical_representation_workflow(graphical_job, project, topologies)
+            end block
+
+        case (replicate_selector_workflow_step_type_id)
+            block
+                type(replicate_selector_workflow_type) :: selector_job
+                type(replica_selector_type) :: selector
+                call read_replicate_selector_workflow(trim(step_config), selector_job)
+                call validate_replicate_selector_workflow(selector_job, project)
+                selector_job%selector_file = resolve_master_step_path(step_config, &
+                    trim(selector_job%selector_file))
+                call run_replicate_selector_workflow(selector_job, project, selector)
+            end block
+
+        case (euclidean_lifting_workflow_step_type_id)
+            block
+                type(euclidean_lifting_workflow_type) :: lifting_job
+                call read_euclidean_lifting_workflow(lifting_job, trim(step_config))
+                call validate_euclidean_lifting_workflow(lifting_job)
+                lifting_job%io_params%cv_plan_filename = resolve_master_step_path( &
+                    step_config, trim(lifting_job%io_params%cv_plan_filename))
+                lifting_job%io_params%selector_file = resolve_master_step_path( &
+                    step_config, trim(lifting_job%io_params%selector_file))
+                lifting_job%io_params%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(lifting_job%io_params%lifting_plan_filename))
+                call run_euclidean_lifting_workflow(lifting_job, project, topologies)
+            end block
+
+        case (master_workflow_step_type_id)
+            call execute_master_tree(trim(step_config), next_master_stack, depth + 1)
+
+        case default
+            write(error_unit, '(A,I0)') 'ERROR: Unknown workflow step type ID: ', master%steps(i)%step_type
+            error stop 'Execution failed due to unknown step type.'
+        end select
+
+        write(output_unit, '(3A)') '<<< Finished Step: ', trim(master%steps(i)%step_name), ' [DONE]'
+    end do
+
+    write(output_unit, '(A,A)') 'Finished master workflow: ', trim(current_master)
+end subroutine execute_master_tree
+
+function resolve_master_step_path(master_filename, configured_path) result(resolved_path)
+    implicit none
+
+    character(len=*), intent(in) :: master_filename, configured_path
+    character(len=1024) :: resolved_path, normalized_config, parent_dir, candidate
+    logical :: file_exists
+    integer :: slash_position
+
+    normalized_config = trim(adjustl(configured_path))
+    if (len_trim(normalized_config) == 0) error stop 'Empty workflow configuration path.'
+    if (normalized_config(1:1) == '/') then
+        resolved_path = normalize_workflow_path(trim(normalized_config))
+        return
+    end if
+
+    slash_position = scan(trim(master_filename), '/', back=.true.)
+    if (slash_position == 0) then
+        parent_dir = '.'
+    else if (slash_position == 1) then
+        parent_dir = '/'
+    else
+        parent_dir = master_filename(:slash_position - 1)
+    end if
+
+    if (trim(parent_dir) == '.') then
+        candidate = normalize_workflow_path(trim(normalized_config))
+    else if (trim(parent_dir) == '/') then
+        candidate = normalize_workflow_path('/' // trim(normalized_config))
+    else
+        candidate = normalize_workflow_path(trim(parent_dir) // '/' // trim(normalized_config))
+    end if
+    inquire(file=trim(candidate), exist=file_exists)
+    if (file_exists) then
+        resolved_path = candidate
+        return
+    end if
+
+    candidate = normalize_workflow_path(trim(normalized_config))
+    inquire(file=trim(candidate), exist=file_exists)
+    if (file_exists) then
+        resolved_path = candidate
+    else
+        resolved_path = normalize_workflow_path(trim(parent_dir) // '/' // trim(normalized_config))
+    end if
+end function resolve_master_step_path
+
+function normalize_workflow_path(path) result(normalized_path)
+    implicit none
+
+    character(len=*), intent(in) :: path
+    character(len=1024) :: normalized_path, source, components(256)
+    integer :: source_length, position, component_end, component_count, i, output_length
+    logical :: is_absolute
+
+    source = trim(adjustl(path))
+    source_length = len_trim(source)
+    if (source_length == 0) error stop 'Cannot normalize an empty path.'
+    is_absolute = source(1:1) == '/'
+    component_count = 0
+    position = 1
+
+    do while (position <= source_length)
+        if (source(position:position) == '/') then
+            position = position + 1
+            cycle
+        end if
+        component_end = position
+        do while (component_end <= source_length)
+            if (source(component_end:component_end) == '/') exit
+            component_end = component_end + 1
+        end do
+
+        select case (source(position:component_end - 1))
+        case ('.')
+            continue
+        case ('..')
+            if (component_count > 0) then
+                if (trim(components(component_count)) /= '..') then
+                    component_count = component_count - 1
+                else if (.not. is_absolute) then
+                    if (component_count >= size(components)) error stop 'Workflow path has too many components.'
+                    component_count = component_count + 1
+                    components(component_count) = '..'
+                end if
+            else if (.not. is_absolute) then
+                if (component_count >= size(components)) error stop 'Workflow path has too many components.'
+                component_count = component_count + 1
+                components(component_count) = '..'
+            end if
+        case default
+            if (component_count >= size(components)) error stop 'Workflow path has too many components.'
+            component_count = component_count + 1
+            components(component_count) = source(position:component_end - 1)
+        end select
+        position = component_end + 1
+    end do
+
+    normalized_path = ''
+    output_length = 0
+    if (is_absolute) then
+        normalized_path(1:1) = '/'
+        output_length = 1
+    end if
+    do i = 1, component_count
+        if (output_length > 0) then
+            if (normalized_path(output_length:output_length) /= '/') then
+                output_length = output_length + 1
+                normalized_path(output_length:output_length) = '/'
+            end if
+        end if
+        if (output_length + len_trim(components(i)) > len(normalized_path)) then
+            error stop 'Normalized workflow path is too long.'
+        end if
+        normalized_path(output_length + 1:output_length + len_trim(components(i))) = trim(components(i))
+        output_length = output_length + len_trim(components(i))
+    end do
+    if (output_length == 0) normalized_path = '.'
+end function normalize_workflow_path
 
 
 subroutine run_library_workflow(job, topologies, sc_lib, dom_lib, user_lib)
@@ -685,7 +1392,11 @@ subroutine run_library_workflow(job, topologies, sc_lib, dom_lib, user_lib)
     type(user_cv_library_type),   intent(out)     :: user_lib
     type(time_window) :: window
     integer :: i, j, valid_count
-
+    logical :: is_active
+    logical, allocatable :: local_filters(:)
+    integer :: filter_val
+    logical, allocatable :: local_domain_filters(:)
+integer :: domain_val
     write(*,*)
     write(*,*) '======================================'
     write(*,*) '      Executing Library Workflow      '
@@ -696,110 +1407,192 @@ subroutine run_library_workflow(job, topologies, sc_lib, dom_lib, user_lib)
     ! --------------------------------------------------
     ! 2. Sidechain-Bibliothek initialisieren & filtern
     ! --------------------------------------------------
-    if (job%run_params%initialize_sidechain_maps) then
+    if (job%run_params%initialize_sidechain_cvs) then
         write(*,*) '-> Initializing and computing Sidechain library...'
         call init_resnames_and_sidechain_head_groups(sc_lib)
         call init_sidechain_head(sc_lib)
-        call  make_sc_res_maps(sc_lib,job%model_params%istate, topologies)
+        call make_sc_res_maps(sc_lib,job%model_params%istate, topologies)
         call compute_freq_and_resids(sc_lib, job%model_params%istate, topologies)
         
-        write(0,*) 'sidechainlib preinitialization done'
-        pause
+        do i=1,sc_lib%ncv
+        write(0,*) sc_lib%residue(i)%freq,'resids',sc_lib%residue(i)%resname
+        end do
+       
         
-        
+       write(0,*) 'Sidechain lib preinitialization done',job%io_params%read_sidechain_library
+       if (job%io_params%read_sidechain_library) then
+        call read_sidechain_library(trim(job%io_params%sidechain_library_file),sc_lib)
+       end if
+       
+       write(0,*) shape(job%sc_type_filters)
+       write(0,*) job%sc_type_filters
+       write(0,*) sc_lib%ncv
+       
+      ! pause
 ! Workflow-Filter anwenden: Inaktive Typen komplett auf Frequenz 0 setzen
-        if (allocated(job%sc_type_filters)) then
-            if (size(job%sc_type_filters) == sc_lib%ncv) then
-                do i = 1, sc_lib%ncv
-                    if (.not. job%sc_type_filters(i)) then
-                        sc_lib%residue(i)%freq = 0
-                        if (allocated(sc_lib%residue(i)%res_ids)) then
-                            deallocate(sc_lib%residue(i)%res_ids)
-                        end if
-                    end if
-                end do
-            end if
-        end if
-        end if
+! Workflow-Filter anwenden: Inaktive Typen komplett auf Frequenz 0 setzen
+if (allocated(job%sc_type_filters)) then
+    if (size(job%sc_type_filters) == sc_lib%ncv) then
+        allocate(local_filters(sc_lib%ncv))
+        local_filters = job%sc_type_filters
+        write(0,*) local_filters
+        
+        
+  do i = 1, sc_lib%ncv
+    ! Wir mappen den Filter direkt auf einen Integer
+    if (local_filters(i)) then
+        filter_val = 1
+    else
+        filter_val = 0
+    end if
 
+    !write(0,*) i, 'Filter-Int:', filter_val, 'out'
+
+   
+    if (filter_val == 0) then
+    !    write(0,*) i, 'Filter-Int:', filter_val, 'in'
+        sc_lib%residue(i)%freq = 0
+        write(0,*) i, trim(sc_lib%residue(i)%resname), 'aussortiert'
+        if (allocated(sc_lib%residue(i)%res_ids)) then
+            deallocate(sc_lib%residue(i)%res_ids)
+        end if
+    end if
+end do
+        
+        deallocate(local_filters)
+    end if
+end if
+        
+        !do i=1,sc_lib%ncv
+        !write(0,*) sc_lib%residue(i)%freq,'resids',sc_lib%residue(i)%resname
+        !end do
+        
+
+end if
     ! --------------------------------------------------
     ! 3. Domain-Bibliothek initialisieren & filtern (Nur aktive behalten)
     ! --------------------------------------------------
-    if (job%run_params%initialize_domain_maps) then
+    if (job%run_params%initialize_domain_cvs) then
         write(*,*) '-> Initializing Domain library...'
         call init_domain_maps(topologies%state(job%model_params%istate), dom_lib)
+        
+        if (job%io_params%read_domain_library) then
+           call read_domain_library(trim(job%io_params%domain_library_file), dom_lib)
+        end if
 
-! Inaktive Domains herausfiltern und Array kompaktieren
+        ! Inaktive Domains herausfiltern und Array kompaktieren (mit robustem Integer-Check)
         if (allocated(job%domain_filters)) then
             if (size(job%domain_filters) == dom_lib%ndo) then
-                block
-                    type(domain_library_type) :: temp_lib
+                
+                ! Sicher lokal kopieren
+                if (allocated(local_domain_filters)) deallocate(local_domain_filters)
+                allocate(local_domain_filters(dom_lib%ndo))
+                local_domain_filters = job%domain_filters
 
-                    valid_count = 0
-                    do i = 1, dom_lib%ndo
-                        if (job%domain_filters(i)) valid_count = valid_count + 1
-                    end do
-
-                    if (valid_count < dom_lib%ndo) then
-                        allocate(temp_lib%domain(valid_count))
-                        temp_lib%ndo = valid_count
-                        
-                        j = 0
-                        do i = 1, dom_lib%ndo
-                            if (job%domain_filters(i)) then
-                                j = j + 1
-                                temp_lib%domain(j) = dom_lib%domain(i)
-                            end if
-                        end do
-
-                        call clear_domain_library(dom_lib)
-                        dom_lib = temp_lib
+                ! Gültige Domains über robusten Integer-Check zählen
+                valid_count = 0
+                do i = 1, dom_lib%ndo
+                    if (local_domain_filters(i)) then
+                        domain_val = 1
+                    else
+                        domain_val = 0
                     end if
-                end block
+
+                    if (domain_val == 1) then
+                        valid_count = valid_count + 1
+                    end if
+                end do
+
+                if (valid_count < dom_lib%ndo) then
+                    block
+                        type(domain_library_type) :: temp_lib
+                        if (valid_count > 0) then
+                            allocate(temp_lib%domain(valid_count))
+                            temp_lib%ndo = valid_count
+                            
+                            j = 0
+                            do i = 1, dom_lib%ndo
+                                if (local_domain_filters(i)) then
+                                    domain_val = 1
+                                else
+                                    domain_val = 0
+                                end if
+
+                                if (domain_val == 1) then
+                                    j = j + 1
+                                    temp_lib%domain(j) = dom_lib%domain(i)
+                                end if
+                            end do
+
+                            call clear_domain_library(dom_lib)
+                            !call init_domain_maps(topologies%state(job%model_params%istate), dom_lib)
+                            dom_lib = temp_lib
+                        else
+                            call clear_domain_library(dom_lib)
+                            dom_lib%ndo = 0
+                        end if
+                    end block
+                end if
+
+                deallocate(local_domain_filters)
             end if
         end if
     end if
 
-
+!write(0,*) dom_lib%ndo, 'nach loop',job%domain_filters,shape(dom_lib%domain)
+!pause
+!--------------------------------------------------
+! --------------------------------------------------
+    ! 4. User-Defined CV Bibliothek einlesen & filtern (Direkt auf user_lib)
     ! --------------------------------------------------
-    ! 4. User-Defined CV Bibliothek einlesen & filtern (Nur aktive behalten)
-    ! --------------------------------------------------
-    if (job%io_params%read_user_cv_library) then
+    if (job%run_params%initialize_user_cvs) then
         write(*,'(3A)') '-> Reading User CV library from "', trim(job%io_params%user_cv_library_file), '"...'
         call read_user_cv_library(trim(job%io_params%user_cv_library_file), user_lib)
-        call init_user_cv_maps(topologies%state(job%model_params%istate), user_lib)
+        
+        if (user_lib%n_cvs > 0 .and. allocated(user_lib%cvs)) then
+            call init_user_cv_maps(topologies%state(job%model_params%istate), user_lib)
 
-        if (allocated(job%user_cv_filters) .and. size(job%user_cv_filters) == user_lib%n_cvs) then
-            block
-                type(user_cv_library_type) :: temp_user_lib
+            ! Wenn Workflow-Filter vorliegen, wenden wir sie direkt an und schrumpfen das Array
+            if (allocated(job%user_cv_filters) .and. size(job%user_cv_filters) == user_lib%n_cvs) then
+                block
+                    type(user_cv_type), allocatable :: temp_cvs(:)
+                    integer :: valid_count, j
 
-                valid_count = 0
-                do i = 1, user_lib%n_cvs
-                    if (job%user_cv_filters(i)) valid_count = valid_count + 1
-                end do
-
-                if (valid_count < user_lib%n_cvs) then
-                    allocate(temp_user_lib%cvs(valid_count))
-                    temp_user_lib%n_cvs = valid_count
-                    
-                    j = 0
+                    ! 1. Zählen, wie viele übrig bleiben
+                    valid_count = 0
                     do i = 1, user_lib%n_cvs
-                        if (job%user_cv_filters(i)) then
-                            j = j + 1
-                            temp_user_lib%cvs(j) = user_lib%cvs(i)
-                        end if
+                        if (job%user_cv_filters(i)) valid_count = valid_count + 1
                     end do
 
-                    call clear_user_cv_library(user_lib)
-                    user_lib = temp_user_lib
-                end if
-            end block
+                    ! 2. Nur filtern, wenn auch wirklich welche ausgeschlossen wurden
+                    if (valid_count < user_lib%n_cvs) then
+                        if (valid_count > 0) then
+                            allocate(temp_cvs(valid_count))
+                            j = 0
+                            do i = 1, user_lib%n_cvs
+                                if (job%user_cv_filters(i)) then
+                                    j = j + 1
+                                    temp_cvs(j) = user_lib%cvs(i)
+                                end if
+                            end do
+                            
+                            ! Direkt in die echte user_lib verschieben (verhindert den Alloc-Crash)
+                            call move_alloc(temp_cvs, user_lib%cvs)
+                        else
+                            ! Falls alle abgewählt wurden
+                            if (allocated(user_lib%cvs)) deallocate(user_lib%cvs)
+                        end if
+                        
+                        user_lib%n_cvs = valid_count
+                    end if
+                end block
+            end if
+        else
+            user_lib%n_cvs = 0
         end if
     else
         user_lib%n_cvs = 0
     end if
-
-
    ! --------------------------------------------------
     ! 5. Optionale Referenzstruktursuche / Festlegung
     ! --------------------------------------------------
@@ -876,45 +1669,15 @@ end subroutine run_library_workflow
 
 
 
-subroutine build_cv_plan_from_workflow(job, istate, topologies, plan)
-    implicit none    
-
-    type(cv_plan_workflow_type), intent(in) :: job
-    integer, intent(in) :: istate
-    type(topology_set_type), intent(in) :: topologies
-    type(cv_plan), intent(out) :: plan
-
-    type(sidechain_library_type) :: sc_lib
-    type(domain_library_type)    :: dom_lib
-    integer :: i
-
-   ! ! 1. Sidechain-Bibliothek einlesen, falls im Workflow aktiviert
-   ! if (job%run_params%include_sidechain_cvs) then
-   !     !call read_sidechain_library(trim(job%io_params%sidechain_library_file), sc_lib)
-   !     
-   !     ! Schleife über Einträge/Frequenzen in sc_lib und Hinzufügen zum Plan
-   !     ! do i = 1, ...
-   !     !     call add_cv_pair_sidechain(...)
-   !     ! end do
-   ! end if
-
-    ! 2. Domain-Bibliothek einlesen, falls im Workflow aktiviert
-   ! if (job%run_params%include_domain_cvs) then
-   !    ! call read_domain_library(trim(job%io_params%domain_library_file), dom_lib)
-   !     
-   !     ! do i = 1, ...
-   !     !     call add_cv_pair_domaine(...)
-   !     ! end do
-   ! end if
-
-end subroutine build_cv_plan_from_workflow
 
 
 
-subroutine run_euclidean_lifting_workflow(job, project, topologies, cv_p)
+subroutine run_euclidean_lifting_workflow(job, project, topologies)
     use workflow_module           ! Passe den Modulnamen ggf. an
     use project_module
     use topology_module
+    use replicate_selector_workflow_module, only: replica_selector_type, read_replica_selector_file
+    use cv_plan_io_module, only: read_cv_plan
     ! use dein_cv_plan_module          ! Falls der cv_plan einen eigenen Typ hat
     
     implicit none
@@ -922,23 +1685,55 @@ subroutine run_euclidean_lifting_workflow(job, project, topologies, cv_p)
     type(euclidean_lifting_workflow_type), intent(in) :: job
     type(project_type), intent(inout) :: project
     type(topology_set_type), intent(in) :: topologies
-    type(cv_plan), intent(in)     :: cv_p  ! Typ für deinen cv_plan1
+    type(cv_plan) :: cv_p
 
    
     type (refstruc_type)         :: ref1      ! Referenzstruktur für PBC
     type(frame2plot) :: test_frame             ! Für den optionalen PBC-Test
     type(lifting_plan_type) :: lifting_plan
+    type(replica_selector_type) :: selector
+    integer :: selector_state, irep, active_replicates
 
     write(*,*)
     write(*,*) '======================================'
     write(*,*) '   Executing Euclidean Lifting Pipeline'
     write(*,*) '======================================'
 
+    if (.not. allocated(project%state)) error stop 'Project has no states for lifting'
+    if (job%run_params%lift_istate < 1 .or. job%run_params%lift_istate > project%nstate) then
+        error stop 'Selected lifting state is outside the project'
+    end if
+    if (size(project%state) < project%nstate) error stop 'Project state array is inconsistent'
+    if (project%state(job%run_params%lift_istate)%nrep < 1 .or. &
+        .not. allocated(project%state(job%run_params%lift_istate)%rep)) then
+        error stop 'Selected lifting state has no replicates'
+    end if
+    if (size(project%state(job%run_params%lift_istate)%rep) /= &
+        project%state(job%run_params%lift_istate)%nrep) then
+        error stop 'Selected lifting state has an inconsistent replicate array'
+    end if
+
     ! --------------------------------------------------
     ! 1. Optionale PBC-Korrektur vorbereiten und testen
     ! --------------------------------------------------
     if (job%run_params%use_pbc_correction) then
         write(*,*) 'Preparing PBC correction...'
+        if (job%run_params%ref_irep > project%state(job%run_params%lift_istate)%nrep) then
+            error stop 'PBC reference replicate is outside the selected state'
+        end if
+        if (job%run_params%ref_itime > &
+            project%state(job%run_params%lift_istate)%rep(job%run_params%ref_irep)%n_frames_use_total) then
+            error stop 'PBC reference time is outside the selected replicate'
+        end if
+        if (job%run_params%test_pbc) then
+            if (job%run_params%pbc_irep > project%state(job%run_params%lift_istate)%nrep) then
+                error stop 'PBC test replicate is outside the selected state'
+            end if
+            if (job%run_params%pbc_itime > &
+                project%state(job%run_params%lift_istate)%rep(job%run_params%pbc_irep)%n_frames_use_total) then
+                error stop 'PBC test time is outside the selected replicate'
+            end if
+        end if
         
         ! State ist fix über job%run_params%lift_istate definiert, 
         ! Replik und Timestep kommen aus den Parametern
@@ -978,6 +1773,28 @@ subroutine run_euclidean_lifting_workflow(job, project, topologies, cv_p)
     ! --------------------------------------------------
     if (job%run_params%execute_lifting) then
         write(*,*) 'Executing lifting '
+
+        call read_cv_plan(cv_p, trim(job%io_params%cv_plan_filename))
+        call read_replica_selector_file(trim(job%io_params%selector_file), selector, selector_state)
+        if (selector_state /= job%run_params%lift_istate) then
+            error stop 'Replicate selector state does not match lifting state'
+        end if
+        if (selector%nrep_total /= project%state(job%run_params%lift_istate)%nrep) then
+            error stop 'Replicate selector size does not match lifting state'
+        end if
+        if (selector%nrep_active < 1) error stop 'Replicate selector contains no active replicates'
+
+        active_replicates = 0
+        do irep = 1, lifting_plan%nreps(job%run_params%lift_istate)
+            if (.not. selector%is_active(irep)) then
+                lifting_plan%nblock(job%run_params%lift_istate, irep) = 0
+            else
+                active_replicates = active_replicates + 1
+            end if
+        end do
+        write(*,'(A,I0,A,I0)') 'Lifting active replicates: ', active_replicates, ' of ', selector%nrep_total
+        call write_lifting_plan(lifting_plan, trim(job%io_params%lifting_plan_filename))
+        write(*,'(3A)') 'Lifting plan saved to "', trim(job%io_params%lifting_plan_filename), '"'
         
         call execute_lifting_plan_centroid( &
             cv_p                 = cv_p, &
@@ -988,7 +1805,8 @@ subroutine run_euclidean_lifting_workflow(job, project, topologies, cv_p)
             prefix_lifted_tra    = trim(job%io_params%lifted_prefix), &
             path_centroid_tra    = trim(job%io_params%centroid_path)//'/', &
             prefix_centroid_tra  = trim(job%io_params%centroid_prefix), &
-            output_policy        = trim(job%io_params%output_policy))
+            output_policy        = trim(job%io_params%output_policy), &
+            use_pbc_correction   = job%run_params%use_pbc_correction)
 
         write(*,*) 'Euclidean lifting finished successfully.'
     else
@@ -999,196 +1817,6 @@ subroutine run_euclidean_lifting_workflow(job, project, topologies, cv_p)
 end subroutine run_euclidean_lifting_workflow
 
 
-
-
-        
-subroutine find_common_ref(istat,irep,sc_lib_opt,dom_lib_opt)
-
-implicit none
-integer,intent(in) :: istat,irep
-type(time_window) :: window
-integer :: start_search,end_search,stride_search
-integer :: itest,nttest,ct,i,j1(1)
-real(8), allocatable :: stats_b(:),stats_s(:)
-real(8), allocatable :: all_stats_b(:,:),all_stats_s(:,:)
-real(8) :: sum_res
-type(sidechain_library_type) ,intent(inout):: sc_lib_opt
-type(domain_library_type)    ,intent(inout):: dom_lib_opt
-integer :: isc,idom,cc,ca,j
-real(8), allocatable  :: min_sc(:),min_do(:)
-integer, allocatable  :: mini_sc(:),mini_do(:)
-
-
-start_search =1
-end_search   =100000
-stride_search=1000
-
-nttest=(end_search-start_search+1)
-nttest=nttest/stride_search
-
-
-call ref_from_frames(1,1,1,sc_lib,topologies,project)
-
-
-call init_domain_maps(topologies%state(1),dom_lib)
-call ref_from_frames_domains(1,1,1,dom_lib,topologies,project)
-ca=0
-do isc=1,sc_lib%ncv
-do i=1,min(sc_lib%residue(isc)%freq,1)
-ca=ca+1
-end do
-end do
-write(0,*)'number of occurrent res',ca
-pause
-
-call test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
-
-!write(0,*) nttest,size(stats_b),size(stats_s)
-!pause
-allocate(all_stats_b(nttest,size(stats_b)))
-allocate(all_stats_s(nttest,size(stats_s)))
-allocate(min_do(dom_lib%ndo))
-allocate(min_sc(ca))
-allocate(mini_do(size(min_do)))
-allocate(mini_sc(size(min_sc)))
-
-ct=0
-min_sc=100000._8
-min_do=100000._8
-do itest=start_search,end_search,stride_search
-     ct=ct+1
-     call ref_from_frames(itest,1,1,sc_lib,topologies,project)
-     
-     !call test_get_ref_from_frames(sc_lib,topologies,project)
-     
-     
-     !call ref_from_frames_domains(1,dom_lib,topologies,project)
-     
-     call ref_from_frames_domains(itest,1,1,dom_lib,topologies,project)
-     
-     call test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
-     all_stats_b(ct,:)=stats_b
-     all_stats_s(ct,:)=stats_s
-     
-     cc=0
-     ca=0
-     do isc=1,sc_lib%ncv
-        sum_res=0._8
-        do i=1,sc_lib%residue(isc)%freq
-            if(i==1) ca=ca+1
-            j=sc_lib%residue(isc)%res_ids(i)
-            cc=cc+1
-            sum_res=sum_res+stats_s(cc)
-            write(0,*)ca, cc,stats_s(cc),sc_lib%residue(isc)%resname!,sum_res,'sum',min_sc(ca)>sum_res,CA
-        if(min_sc(ca)>sum_res) then
-           sc_lib_opt%residue(isc)=sc_lib%residue(isc)
-        min_sc(ca) =sum_res
-        mini_sc(ca)=ct
-        end if
-	    end do
-     end do
-     
-     do i=1,dom_lib%ndo
-      if(stats_b(i)<min_do(i)) then
-      	dom_lib_opt%domain(i)=dom_lib%domain(i)
-      	mini_do(i)=ct
-      end if
-     end do
-end do
-
-
-ca=0
-     do isc=1,sc_lib%ncv
-        do i=1,min(sc_lib%residue(isc)%freq,1) 
-            ca=ca+1   
-                write(0,*)sc_lib_opt%residue(isc)%resname
-                write(0,*)ca,   sc_lib_opt%residue(isc)%cv(1,:)
-                write(0,*)ca,   sc_lib_opt%residue(isc)%cv(2,:)
-                write(0,*) sqrt(min_sc(ca)/dble(sc_lib%residue(isc)%freq)),mini_sc(ca)
-	            write(0,*)
-         end do
-     end do
-
-     
-     do i=1,dom_lib_opt%ndo
-         write(0,*) all_stats_b(:,i),'domain instability',i,mini_do(i)
-         write(0,*) dom_lib_opt%domain(i)%cv(1,:)
-         write(0,*) dom_lib_opt%domain(i)%cv(2,:)
-         write(0,*) 
-     end do
-
-     
-     
-     
-   
-end subroutine
-
-
-
-
-
-
-subroutine test_window_loader
-implicit none
-integer ::i,ntstep,nt
-type(time_window) :: window
-type(window_map)  :: map
-type(raw_data_block) :: block
-logical,allocatable  :: window_mask(:) 
-
-
-window%istate =1
-window%irep   =1
-window%start_time_step =1
-window%end_time_step   =2
-
-ntstep=window%end_time_step-window%start_time_step+1
-
-allocate(window_mask(ntstep))
-window_mask=.true.
-
-
-call load_raw_data_block( &
-    project, &
-    window, &
-    window_mask, &
-    block)
-
-    nt=count(window_mask)
-    write(0,*) block%istate
-    
-    do i=1,nt
-    write(0,*) block%xyz(:,1,i)
-    end do
-    
-window%istate =1
-window%irep   =1
-window%start_time_step =2
-window%end_time_step   =3
-
-ntstep=window%end_time_step-window%start_time_step+1
-
-!allocate(window_mask(ntstep))
-window_mask=.true.
-
-!call get_window_map(window, project, map)
-call print_window_map(window, map)
-
-call load_raw_data_block( &
-    project, &
-    window, &
-    window_mask, &
-    block)
-
-    nt=count(window_mask)
-    write(0,*) block%istate
-    
-    do i=1,nt
-    write(0,*) block%xyz(:,1,i),i
-    end do
-    
-    
-end subroutine test_window_loader
 
 
 subroutine project_setting(project)
@@ -1229,43 +1857,6 @@ end do
 end subroutine
 
 
-
-
-
-
-subroutine make_plan() 
-implicit none
-integer :: i,j,k,fdcd,natomdcd
-
-    write(0,*)
-    write(0,*) '================================'
-    write(0,*) 'PROJECT SUMMARY'
-    write(0,*) '================================'
-
-    write(0,*) 'states:',project%nstate
-
-    do i=1,project%nstate
-        write(0,*)
-        write(0,*) 'state:',trim(project%state(i)%name)
-        write(0,*) 'pdb  :',trim(project%state(i)%pdb_ref)
-        write(0,*) 'replicates:',project%state(i)%nrep
-
-        do j=1,project%state(i)%nrep
-            write(0,*) '  rep',j
-            write(0,*) '     dir :',trim(project%state(i)%rep(j)%dcd_dir)
-            write(0,*) '     ndcd:',project%state(i)%rep(j)%ndcd
-            do k=1,project%state(i)%rep(j)%ndcd
-                write(0,*) 'file:',trim(project%state(i)%rep(j)%dcd_files(k))
-                call read_dcd_header(trim(project%state(i)%rep(j)%dcd_files(k)),fdcd,natomdcd)
-                write(0,*) 'frames in dcd',fdcd,'atoms in dcd', natomdcd
-                pause
-            end do
-        end do
-    end do
-
-    write(0,*)
-
-end subroutine make_plan 
 
 
 
@@ -1348,275 +1939,6 @@ subroutine test_topology(topo)
 end subroutine test_topology
 
 
-
-subroutine test_simple_vector_cv_statisics(topologies,sc_lib,dom_lib,project,stats_b,stats_s)
-implicit none
-
-type(time_window) :: window
-type(project_type), intent(in)           ::project
-type(sidechain_library_type), intent(in) ::sc_lib
-type(domain_library_type) , intent(in)   ::dom_lib
-type(topology_set_type)   , intent(in)   ::topologies
-
-logical,allocatable  ::activ_res(:)
-logical,allocatable  ::activ_dom(:)
-logical,allocatable  ::window_mask(:) 
-integer :: ntstep
-real(8),allocatable :: stats_b(:),stats_s(:)
-
-!call sidechain_cv_inventur(topologies,1,sc_lib)
-
-
-window%istate =1
-window%irep   =1
-window%start_time_step =1
-window%end_time_step   =1000
-ntstep=window%end_time_step-window%start_time_step+1
-
-allocate(activ_dom(dom_lib%ndo))
-allocate(window_mask(ntstep))
-activ_dom=.true.
-window_mask=.false.
-window_mask=.true.
-!window_mask(ntstep-10:ntstep)=.true.
-call simple_vector_cv_statisics(topologies,window,window_mask,activ_res,activ_dom,sc_lib,dom_lib,project,stats_b,stats_s)
-
-end subroutine
-
-
-
-
-subroutine simple_vector_cv_statisics(topologies,window,window_mask,activ_res&
-,activ_dom,sc_lib,dom_lib,project,stats_b,stats_s)
-implicit none
-type(topology_set_type), intent(in)      ::topologies
-type(project_type), intent(in)           ::project
-type(domain_library_type) , intent(in)   ::dom_lib
-type(sidechain_library_type), intent(in) ::sc_lib
-type(time_window),intent(in) :: window
-type(raw_data_block) :: block
-type(window_map)     :: map
-
-logical,allocatable, intent(in) :: activ_res(:),activ_dom(:)
-logical,allocatable, intent(in)  :: window_mask(:) 
-integer :: time_step,i,iatom,idom,ntstep
-real(8) :: b1(3),b2(3),s1(3),s2(3),lb1,lb2,b12,basis(3,3),t1(3),t2(3),t3(3),t4(3),t5(3)
-real(8) :: b1_res(3),b2_res(3),s1_res(3),s2_res(3),lb1_res,lb2_res,b12_res,basis_res(3,3)
-real(8) ::q1(3),q2(3)
-real(8),allocatable :: l1diffsq(:),l2diffsq(:),b12diffsq(:),l1s,l2s,b12s
-real(8),allocatable :: l1diffsq_res(:),l2diffsq_res(:),b12diffsq_res(:),l1s_res,l2s_res,b12s_res
-real(8),allocatable :: stats_b(:),stats_s(:)
-integer :: ndomain,nres,ncv,ncvtype,j, ires
-
-
-!call get_window_map(window, project, map)
-call load_raw_data_block( &
-    project, &
-    window, &
-    window_mask, &
-    block)
-    
-    ndomain=dom_lib%ndo
-    
-allocate( l1diffsq(ndomain))
-allocate( l2diffsq(ndomain))
-allocate(b12diffsq(ndomain))
-
-nres=topologies%state(window%istate)%topo%nres
-allocate( l1diffsq_res(nres))
-allocate( l2diffsq_res(nres))
-allocate(b12diffsq_res(nres))
-
-ntstep=count(window_mask)
-
- l1diffsq=0._8
- l2diffsq=0._8
-b12diffsq=0._8
-
-l1diffsq_res = 0.d0
-l2diffsq_res = 0.d0
-b12diffsq_res = 0.d0
-
-do time_step=1,ntstep
-
-
-
-
-    do idom=1,dom_lib%ndo
-    
-    b1=0._8
-    b2=0._8
-    s1=0._8
-    s2=0._8
-    
-        do i=1,dom_lib%domain(idom)%natom_keep
-        
-        iatom=dom_lib%domain(idom)%map(i)+dom_lib%domain(idom)%start_atom-1
-        b1=b1+block%xyz(:,iatom,time_step)*dom_lib%domain(idom)%cv(1,i)
-        b2=b2+block%xyz(:,iatom,time_step)*dom_lib%domain(idom)%cv(2,i)
-        
-        end do
-        !write(0,*) block%xyz(:,iatom,time_step),'#############'
-        !write(0,*)shape(block%xyz)
-    lb1=dot_product(b1,b1)
-    lb2=dot_product(b2,b2)
-    lb1=sqrt(lb1)
-    lb2=sqrt(lb2)
-    b1=b1/lb1
-    b2=b2/lb2
-    b12=dot_product(b1,b2)
-    !write(0,*) lb1,lb2,b12
-    
-    l1s =1._8-lb1
-    l2s =1._8-lb1
-    b12s=b12
-             
-     l1diffsq(idom)= l1diffsq(idom)+l1s *l1s 
-     l2diffsq(idom)= l2diffsq(idom)+l2s *l2s 
-    b12diffsq(idom)=b12diffsq(idom)+b12s*b12s
-    
-    basis(1,:)=b1
-    basis(2,:)=b2
-    basis(3,:)=cross_product(b1,b2)
-    
-    
-    end do
-    
-
-
-do ncvtype = 1, size(sc_lib%residue)
-
-    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
-
-    do j = 1, sc_lib%residue(ncvtype)%freq
-
-        ires = sc_lib%residue(ncvtype)%res_ids(j)
-
-        b1_res = 0.d0
-        b2_res = 0.d0
-
-        do i = 1, sc_lib%residue(ncvtype)%natom_head
-
-            iatom = sc_lib%residue(ncvtype)%map(i) + &
-                    topologies%state(window%istate)%topo%acid_start_list(ires) - 1
-
-            b1_res = b1_res + block%xyz(:,iatom,time_step) * &
-                               sc_lib%residue(ncvtype)%cv(1,i)
-
-            b2_res = b2_res + block%xyz(:,iatom,time_step) * &
-                               sc_lib%residue(ncvtype)%cv(2,i)
-
-         !write(0,*) topologies%state(window%istate)%topo%atom_id(iatom),sc_lib%residue(ncvtype)%map(i)
-        
-         
-       
-         
-         end do
-         
-         
-
-!write(0,*) dot_product(b1_res,b2_res)       
-!write(0,*) b1_res, b2_res,sc_lib%residue(ncvtype)%resname
-        lb1_res = sqrt(dot_product(b1_res,b1_res))
-        lb2_res = sqrt(dot_product(b2_res,b2_res))
-!write(0,*)sc_lib%residue(ncvtype)%cv(1,:)
-!write(0,*)sc_lib%residue(ncvtype)%cv(2,:)
-!pause
-        !if (lb1_res <= tiny(1.d0) .or. lb2_res <= tiny(1.d0)) cycle
-
-        b1_res = b1_res / lb1_res
-        b2_res = b2_res / lb2_res
-
-        b12_res = dot_product(b1_res,b2_res)
-        write(0,*) lb1_res,lb2_res,b12_res,'llc'&
-        ,topologies%state(window%istate)%topo%resnames(ires)&
-        ,ires,sc_lib%residue(ncvtype)%resname
-        
-        l1s_res  = 1.d0 - lb1_res
-        l2s_res  = 1.d0 - lb2_res
-        b12s_res = b12_res
-
-        l1diffsq_res(ires)  = l1diffsq_res(ires)  + l1s_res*l1s_res
-        l2diffsq_res(ires)  = l2diffsq_res(ires)  + l2s_res*l2s_res
-        b12diffsq_res(ires) = b12diffsq_res(ires) + b12s_res*b12s_res
-
-        basis_res(1,:) = b1_res
-        basis_res(2,:) = b2_res
-        basis_res(3,:) = cross_product(b1_res,b2_res)
-
-    end do
-
-end do
- 
-!pause
-end do
-
-
-
- l1diffsq= l1diffsq/dble(ntstep)
- l2diffsq= l2diffsq/dble(ntstep)
-b12diffsq=b12diffsq/dble(ntstep)
-
-
-
-
-
-write(0,*)
-write(0,*) 'local domain basis instability scores'
-write(0,*)
-do idom=1,ndomain
-write(0,*) dom_lib%domain(idom)%domain_name,l1diffsq(idom),l2diffsq(idom),b12diffsq(idom)
-write(0,*) dom_lib%domain(idom)%natom_keep/3,-log(l1diffsq(idom)),-log(l2diffsq(idom)),-log(b12diffsq(idom))
-write(0,*) idom,-log(l1diffsq(idom))-log(l2diffsq(idom))-log(b12diffsq(idom))
-end do
-
-
- l1diffsq_res= l1diffsq_res/dble(ntstep)
- l2diffsq_res= l2diffsq_res/dble(ntstep)
-b12diffsq_res=b12diffsq_res/dble(ntstep)
-
-
-i=0
-write(0,*)
-write(0,*) 'local sidechain basis instability scores'
-write(0,*)
-do idom=2,topologies%state(window%istate)%topo%nres-1
-if(topologies%state(window%istate)%topo%resnames(idom)=='GLY'.or. topologies%state(window%istate)%topo%resnames(idom)=='ALA') cycle
-i=i+1
-write(0,*) topologies%state(window%istate)%topo%resnames(idom)
-write(0,*) l1diffsq_res(idom),l2diffsq_res(idom),b12diffsq_res(idom)
-!write(0,*) -log(l1diffsq_res(idom)),-log(l2diffsq_res(idom)),-log(b12diffsq_res(idom))
-!write(0,*) idom,-log(l1diffsq_res(idom))-log(l2diffsq_res(idom))-log(b12diffsq_res(idom))
-!write(0,*)
-end do
-
-!write(0,*) ndomain,'???',dom_lib%ndo
-if(allocated(stats_b)) deallocate(stats_b)
-allocate(stats_b(dom_lib%ndo))
-
-
-if(allocated(stats_s)) deallocate(stats_s)
-allocate(stats_s(i))
-i=0
-do ncvtype = 1, size(sc_lib%residue)
-
-    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
-
-    do j = 1, sc_lib%residue(ncvtype)%freq
-        i=i+1
-        ires = sc_lib%residue(ncvtype)%res_ids(j)
-        
-        stats_s(i)=b12diffsq_res(ires)
-
-  end do
-end do
-        
-        
-        
-stats_b=b12diffsq
-
-!pause
-end subroutine
 
 
 

@@ -381,7 +381,7 @@ subroutine finalize_state_topology_domains(topologies)
 
         ! Loop über alle Domänen des aktuellen States zur Bestimmung der Residuenbereiche und Atomgrenzen
         do i = 1, topologies%state(istate)%ndomain
-            write(0,*) 'Finalizing Domain Topology [State ', istate, ']: ', topologies%state(istate)%domain(i)%name
+            !write(0,*) 'Finalizing Domain Topology [State ', istate, ']: ', topologies%state(istate)%domain(i)%name
 
             first_res = topologies%state(istate)%domain(i)%first_res
             last_res  = topologies%state(istate)%domain(i)%last_res
@@ -415,7 +415,7 @@ subroutine finalize_state_topology_domains(topologies)
         end do
     end do
 
-    write(0,*) 'All states topology domain finalization done'
+    !write(0,*) 'All states topology domain finalization done'
 end subroutine finalize_state_topology_domains
 
 end module topology_module

@@ -204,7 +204,8 @@ subroutine execute_lifting_plan_centroid( &
     prefix_lifted_tra, &
     path_centroid_tra, &
     prefix_centroid_tra, &
-    output_policy)
+    output_policy, &
+    use_pbc_correction)
 
     use output_policy_module
 
@@ -228,6 +229,7 @@ subroutine execute_lifting_plan_centroid( &
     character(len=*), intent(in) :: prefix_centroid_tra
 
     character(len=*), intent(in) :: output_policy
+    logical, intent(in), optional :: use_pbc_correction
 
     integer :: irep, istate, iblock
     integer :: output_action_lifted
@@ -400,10 +402,11 @@ subroutine execute_lifting_plan_centroid( &
                 ! Unwrap
                 ! ------------------------------------------------
 
-                call unwrap_xyz_block( &
-                    ref, &
-                    block%xyz, &
-                    block%boxl)
+                if (.not. present(use_pbc_correction)) then
+                    call unwrap_xyz_block(ref, block%xyz, block%boxl)
+                else if (use_pbc_correction) then
+                    call unwrap_xyz_block(ref, block%xyz, block%boxl)
+                end if
 
 
                 ! ------------------------------------------------

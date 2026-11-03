@@ -128,7 +128,7 @@ subroutine initialize_system(project, topologies)
         write(0,*)'ndomains', topologies%state(istate)%ndomain
         
         do idom=1,topologies%state(istate)%ndomain
-             write(0,*)'idom', idom,topologies%state(istate)%domain(idom)%name
+             write(0,*), idom,topologies%state(istate)%domain(idom)%name
         end do
         
 

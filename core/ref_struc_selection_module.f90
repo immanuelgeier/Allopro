@@ -70,7 +70,7 @@ subroutine ref_struc_fixed_user(project, topologies, sc_lib, dom_lib, user_lib, 
         dom_lib%domain(icv)%d1_ref = d1_orig
         dom_lib%domain(icv)%d2_ref = d2_orig
         dom_lib%domain(icv)%cv = cv
-        
+        !pause
         deallocate(xyz, cv)
     end do
 
@@ -80,6 +80,7 @@ subroutine ref_struc_fixed_user(project, topologies, sc_lib, dom_lib, user_lib, 
     jres = 1 
     ! ==========================================================
     do icv = 1, sc_lib%ncv
+    write(0,*) trim(sc_lib%residue(icv)%resname),sc_lib%residue(icv)%has_sym
         if (sc_lib%residue(icv)%freq == 0) cycle
 
         call get_res_ref(1, istate, icv, jres, sc_lib, topologies, block, xyz)
@@ -398,7 +399,9 @@ subroutine search_user_cv_references(user_lib, topologies, window1, nsample, blo
 
         if (best_j == 0) best_j = 1
         xyz = all_user_xyz(:,:,best_j)
-
+        
+        write(0,*) xyz
+       
         ! Berechnung der Vektoren / Koeffizienten
         call direction_vecs_ref_inv_gyration(natom_cv, xyz, .true., d1_orig, d2_orig, local_cv)
 
@@ -408,10 +411,14 @@ subroutine search_user_cv_references(user_lib, topologies, window1, nsample, blo
         allocate(user_lib%cvs(icv)%cv_values(size(local_cv, 1), size(local_cv, 2)))
         user_lib%cvs(icv)%cv_values = local_cv
 
+        !write(0,*) local_cv
+        !pause
         deallocate(all_user_xyz)
         deallocate(local_cv)
     end do
 end subroutine search_user_cv_references
+
+
 
 subroutine ref_struc_search_rmsd( &
     project,topologies,sc_lib,dom_lib,window1, &
@@ -1757,8 +1764,9 @@ subroutine ref_struc_search_user(project, topologies, sc_lib, dom_lib, user_lib,
             nref = nref + 1
             natom_user = user_lib%cvs(icv)%natom
 
-            allocate(xyz(3, natom_user))
-            call get_user_cv_ref(itimes, window1%istate, icv, user_lib, topologies, block, xyz)
+            !allocate(xyz(3, natom_user))
+            call get_user_cv_ref(itimes,window1%istate, icv, user_lib, topologies, block, xyz)
+            !call get_user_cv_ref(itimes,window1%istate, icv, user_lib, topologies, block, xyz)
             
             ref_method = trim(user_lib%cvs(icv)%reference_method)
 
@@ -1881,8 +1889,20 @@ subroutine ref_struc_search_user(project, topologies, sc_lib, dom_lib, user_lib,
 
         d1_ref = v12 - v11
         d2_ref = v22 - v21
+        
         call direction_vecs_ref_inv(sc_lib%residue(icv)%natom_head, xyz, d1_ref, d2_ref, local_cv)
-
+           if(sc_lib%residue(icv)%has_sym) then	
+               call direction_vecs_sym(sc_lib%residue(icv)%natom_head&
+               ,xyz,sc_lib%residue(icv)%cv_id,local_cv,sc_lib%residue(icv)%order)
+                else
+                ! CV direkt in die lokale Matrix schreiben lassen (2 x natom_head)
+                call direction_vecs_ref_inv( &
+                    sc_lib%residue(icv)%natom_head, &
+                    xyz, &
+                    d1_ref, &
+                    d2_ref, &
+                    local_cv)  ! <-- Direktes Übergeben der lokalen Matrix
+              end if
         sc_lib%residue(icv)%ref_xyz = xyz
         sc_lib%residue(icv)%d1_ref = d1_ref
         sc_lib%residue(icv)%d2_ref = d2_ref
@@ -1909,7 +1929,7 @@ subroutine ref_struc_search_user(project, topologies, sc_lib, dom_lib, user_lib,
         if (best_j == 0) error stop 'No reference selected for user-defined CV'
 
         natom_user = user_lib%cvs(icv)%natom
-        allocate(xyz(3, natom_user))
+        !allocate(xyz(3, natom_user))
         call get_user_cv_ref(best_j, window1%istate, icv, user_lib, topologies, block, xyz)
 
         ref_method = trim(user_lib%cvs(icv)%reference_method)

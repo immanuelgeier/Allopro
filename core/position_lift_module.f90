@@ -7,7 +7,7 @@ module position_lift_module
     implicit none
     private
     public :: lifted_trajectory, lift_cv_plan,lift_cv_plan_centroid,lift_cv_plan_occ,lift_cv_plan_all
-
+    public :: lift_euclidian_cv_plan
     type :: lifted_trajectory
         integer :: nobject
         integer :: ntimes
@@ -21,6 +21,122 @@ module position_lift_module
     end type lifted_trajectory
 
 contains
+
+subroutine lift_euclidian_cv_plan(plan, block, lifted)
+
+    implicit none
+
+    type(cv_plan), intent(in)              :: plan
+    type(raw_data_block), intent(in)       :: block
+    type(lifted_trajectory), intent(out)   :: lifted
+  
+
+    integer :: nobject
+    integer :: ntimes
+    integer :: ntarget
+    integer :: nterm
+
+    integer :: t, k
+    integer :: obj, comp, atom, target_idx
+
+    integer, allocatable :: counts(:)
+
+    real(8) :: xyz(3)
+
+    nobject = size(plan%object)
+    ntimes  = size(block%xyz, 3)
+    nterm   = size(plan%term)
+    ntarget = 2*nobject
+
+    ! ------------------------------------------------------------
+    ! Dimensionen
+    ! ------------------------------------------------------------
+
+    lifted%ntimes   = ntimes
+    lifted%nobject  = nobject
+
+
+
+    ! ------------------------------------------------------------
+    ! Speicher
+    ! ------------------------------------------------------------
+
+    allocate(lifted%vec(3, ntarget, ntimes))
+    allocate(lifted%centroid(3, ntarget, ntimes))
+
+    lifted%vec   = 0.d0
+    lifted%centroid = 0.d0
+
+    allocate(counts(ntarget))
+    counts = 0
+
+    ! ------------------------------------------------------------
+    ! Anzahl Atome pro Objekt bestimmen
+    ! ------------------------------------------------------------
+
+    do k = 1, nterm
+
+        obj  = plan%term(k)%target
+        comp = plan%term(k)%comp
+
+        target_idx = 2*obj - (2-comp)
+
+        counts(target_idx) = counts(target_idx) + 1
+
+    end do
+
+    ! ------------------------------------------------------------
+    ! Gemeinsamer Durchlauf
+    ! ------------------------------------------------------------
+
+    do t = 1, ntimes
+
+        do k = 1, nterm
+
+            atom = plan%term(k)%atom
+            obj  = plan%term(k)%target
+            comp = plan%term(k)%comp
+
+            target_idx = 2*obj - (2-comp)
+
+            ! Position nur einmal aus dem Array holen
+            xyz = block%xyz(:, atom, t)
+
+            ! Gewichtete Summe
+            lifted%vec(:, target_idx, t) = &
+                lifted%vec(:, target_idx, t) + &
+                xyz * plan%term(k)%coeff
+
+            ! Ungewichtete Summe
+            lifted%centroid(:, target_idx, t) = &
+                lifted%centroid(:, target_idx, t) + xyz
+
+        end do
+
+    end do
+
+    ! ------------------------------------------------------------
+    ! Alle Centroids nachträglich normieren
+    !
+    ! Keine t-Schleife mehr.
+    ! ------------------------------------------------------------
+
+    do target_idx = 1, ntarget
+
+        if (counts(target_idx) > 0) then
+
+            lifted%centroid(:, target_idx, :) = &
+                lifted%centroid(:, target_idx, :) / &
+                dble(counts(target_idx))
+
+        endif
+
+    end do
+
+    deallocate(counts)
+
+end subroutine lift_euclidian_cv_plan
+
 
 subroutine lift_cv_plan_all(plan, block, lifted, centroid)
 

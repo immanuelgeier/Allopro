@@ -768,7 +768,6 @@ subroutine compute_freq_and_resids(lib, istate, topologies)
 end subroutine
 
 
-
 subroutine write_sidechain_library(filename, lib)
 
     implicit none
@@ -776,23 +775,22 @@ subroutine write_sidechain_library(filename, lib)
     character(*), intent(in) :: filename
     type(sidechain_library_type), intent(in) :: lib
 
-    integer :: u,i,j
-    logical :: res_is_in_protein
+    integer :: u, i, j
 
-    open(newunit=u,file=filename,status="replace",action="write")
+    open(newunit=u, file=filename, status="replace", action="write")
 
-    write(u,'(A,I0)') "NCV ",lib%ncv
+    write(u,'(A,I0)') "NCV ", lib%ncv
 
-    do i=1,lib%ncv
-        write(u,'(A,I0)') "FREQ ",lib%residue(i)%freq
-        if(lib%residue(i)%freq==0) cycle
+    do i = 1, lib%ncv
+        write(u,'(A,I0)') "FREQ ", lib%residue(i)%freq
+        if (lib%residue(i)%freq == 0) cycle
 
-        write(u,'(A,1X,A)') "RESNAME",trim(lib%residue(i)%resname)
+        write(u,'(A,1X,A)') "RESNAME", trim(lib%residue(i)%resname)
 
-        write(u,'(A,I0)') "NATOM_ALL ",lib%residue(i)%natom_all
-        write(u,'(A,I0)') "NATOM_HEAD ",lib%residue(i)%natom_head
+        write(u,'(A,I0)') "NATOM_ALL ", lib%residue(i)%natom_all
+        write(u,'(A,I0)') "NATOM_HEAD ", lib%residue(i)%natom_head
         
-        write(u,'(A,L1)') "HAS_SYM ",lib%residue(i)%has_sym
+        write(u,'(A,L1)') "HAS_SYM ", lib%residue(i)%has_sym
 
         write(u,'(A,1X,A,1X,A)') "DIR1", &
              trim(lib%residue(i)%dir1_atom_1), &
@@ -816,45 +814,44 @@ subroutine write_sidechain_library(filename, lib)
         write(u,*) size(lib%residue(i)%res_ids)
         write(u,*) lib%residue(i)%res_ids
 
-        write(u,'(A)') "REF_XYZ"
-        write(u,*) size(lib%residue(i)%ref_xyz,2)
+        ! REF_XYZ ist jetzt optional beim Schreiben
+        if (allocated(lib%residue(i)%ref_xyz)) then
+            write(u,'(A)') "REF_XYZ"
+            write(u,*) size(lib%residue(i)%ref_xyz, 2)
+            do j = 1, size(lib%residue(i)%ref_xyz, 2)
+                write(u,'(3F24.16)') lib%residue(i)%ref_xyz(:, j)
+            end do
+        end if
 
-        do j=1,size(lib%residue(i)%ref_xyz,2)
-            write(u,'(3F24.16)') lib%residue(i)%ref_xyz(:,j)
-        end do
-
-        if(allocated(lib%residue(i)%cv)) then
+        if (allocated(lib%residue(i)%cv)) then
             write(u,'(A)') "CV"
-            write(u,*) size(lib%residue(i)%cv,1),size(lib%residue(i)%cv,2)
-
-            do j=1,size(lib%residue(i)%cv,2)
-                write(u,'(3F24.16)') lib%residue(i)%cv(:,j)
+            write(u,*) size(lib%residue(i)%cv, 1), size(lib%residue(i)%cv, 2)
+            do j = 1, size(lib%residue(i)%cv, 2)
+                write(u,'(3F24.16)') lib%residue(i)%cv(:, j)
             end do
-        endif
+        end if
 
-        if(allocated(lib%residue(i)%cv_id)) then
+        if (allocated(lib%residue(i)%cv_id)) then
             write(u,'(A)') "CV_ID"
-            write(u,*) size(lib%residue(i)%cv_id,1),size(lib%residue(i)%cv_id,2)
-
-            do j=1,size(lib%residue(i)%cv_id,2)
-                write(u,'(3F24.16)') lib%residue(i)%cv_id(:,j)
+            write(u,*) size(lib%residue(i)%cv_id, 1), size(lib%residue(i)%cv_id, 2)
+            do j = 1, size(lib%residue(i)%cv_id, 2)
+                write(u,'(3F24.16)') lib%residue(i)%cv_id(:, j)
             end do
-        endif
+        end if
 
-        if(allocated(lib%residue(i)%order)) then
+        if (allocated(lib%residue(i)%order)) then
             write(u,'(A)') "ORDER"
             write(u,*) size(lib%residue(i)%order)
             write(u,*) lib%residue(i)%order
-        endif
+        end if
 
-        if(allocated(lib%residue(i)%perms)) then
+        if (allocated(lib%residue(i)%perms)) then
             write(u,'(A)') "PERMS"
-            write(u,*) size(lib%residue(i)%perms,1),size(lib%residue(i)%perms,2)
-
-            do j=1,size(lib%residue(i)%perms,2)
-                write(u,*) lib%residue(i)%perms(:,j)
+            write(u,*) size(lib%residue(i)%perms, 1), size(lib%residue(i)%perms, 2)
+            do j = 1, size(lib%residue(i)%perms, 2)
+                write(u,*) lib%residue(i)%perms(:, j)
             end do
-        endif
+        end if
 
         write(u,'(A)') "END_RESIDUE"
 
@@ -862,36 +859,31 @@ subroutine write_sidechain_library(filename, lib)
 
     close(u)
 
-end subroutine
+end subroutine write_sidechain_library
 
-
-subroutine read_sidechain_library(filename,lib)
+subroutine read_sidechain_library(filename, lib)
 
     implicit none
 
-    character(*),intent(in) :: filename
-    type(sidechain_library_type),intent(out) :: lib
-    logical :: res_is_in_protein     
-    integer :: u,i,j,n,n1,n2
+    character(*), intent(in) :: filename
+    type(sidechain_library_type), intent(out) :: lib
+    integer :: u, i, j, n, n1, n2
     character(32) :: key
 
-    open(newunit=u,file=filename,status="old",action="read")
+    open(newunit=u, file=filename, status="old", action="read")
 
-    read(u,*) key,lib%ncv
+    read(u,*) key, lib%ncv
     allocate(lib%residue(lib%ncv))
-    !read(u,*)
-    do i=1,lib%ncv
-        read(u,*) key,lib%residue(i)%freq
-        if(lib%residue(i)%freq==0) cycle
-        !read(u,*)
-        !read(u,*) key
-        
 
-        read(u,*) key,lib%residue(i)%resname
-        read(u,*) key,lib%residue(i)%natom_all
-        read(u,*) key,lib%residue(i)%natom_head
+    do i = 1, lib%ncv
+        read(u,*) key, lib%residue(i)%freq
+        if (lib%residue(i)%freq == 0) cycle
+
+        read(u,*) key, lib%residue(i)%resname
+        read(u,*) key, lib%residue(i)%natom_all
+        read(u,*) key, lib%residue(i)%natom_head
         
-        read(u,*) key,lib%residue(i)%has_sym
+        read(u,*) key, lib%residue(i)%has_sym
 
         read(u,*) key, &
              lib%residue(i)%dir1_atom_1, &
@@ -917,72 +909,59 @@ subroutine read_sidechain_library(filename,lib)
         allocate(lib%residue(i)%res_ids(n))
         read(u,*) lib%residue(i)%res_ids
 
-        read(u,*) key
-        read(u,*) n
-        allocate(lib%residue(i)%ref_xyz(3,n))
-
-        do j=1,n
-            read(u,*) lib%residue(i)%ref_xyz(:,j)
-        end do
-
+        ! Das nächste Keyword einlesen, um zu prüfen, ob REF_XYZ folgt
         read(u,*) key
 
-        if(trim(key)=="CV") then
-
-            read(u,*) n1,n2
-            allocate(lib%residue(i)%cv(n1,n2))
-
-            do j=1,n2
-                read(u,*) lib%residue(i)%cv(:,j)
+        if (trim(key) == "REF_XYZ") then
+            read(u,*) n
+            allocate(lib%residue(i)%ref_xyz(3, n))
+            do j = 1, n
+                read(u,*) lib%residue(i)%ref_xyz(:, j)
             end do
+            read(u,*) key ! Nächstes Keyword nach REF_XYZ einlesen
+        end if
 
-            read(u,*) key
-
-        endif
-
-        if(trim(key)=="CV_ID") then
-
-            read(u,*) n1,n2
-            allocate(lib%residue(i)%cv_id(n1,n2))
-
-            do j=1,n2
-                read(u,*) lib%residue(i)%cv_id(:,j)
+        if (trim(key) == "CV") then
+            read(u,*) n1, n2
+            allocate(lib%residue(i)%cv(n1, n2))
+            do j = 1, n2
+                read(u,*) lib%residue(i)%cv(:, j)
             end do
-
             read(u,*) key
+        end if
 
-        endif
+        if (trim(key) == "CV_ID") then
+            read(u,*) n1, n2
+            allocate(lib%residue(i)%cv_id(n1, n2))
+            do j = 1, n2
+                read(u,*) lib%residue(i)%cv_id(:, j)
+            end do
+            read(u,*) key
+        end if
 
-        if(trim(key)=="ORDER") then
-
+        if (trim(key) == "ORDER") then
             read(u,*) n
             allocate(lib%residue(i)%order(n))
             read(u,*) lib%residue(i)%order
-
             read(u,*) key
+        end if
 
-        endif
-
-        if(trim(key)=="PERMS") then
-
-            read(u,*) n1,n2
-            allocate(lib%residue(i)%perms(n1,n2))
-
-            do j=1,n2
-                read(u,*) lib%residue(i)%perms(:,j)
+        if (trim(key) == "PERMS") then
+            read(u,*) n1, n2
+            allocate(lib%residue(i)%perms(n1, n2))
+            do j = 1, n2
+                read(u,*) lib%residue(i)%perms(:, j)
             end do
-
             read(u,*) key
+        end if
 
-        endif
-
-        ! key sollte jetzt END_RESIDUE sein
+        ! Jetzt sollte key standardmäßig "END_RESIDUE" sein
 
     end do
 
     close(u)
 
-end subroutine
+end subroutine read_sidechain_library
                 
                    
 end module sidechains

@@ -49,20 +49,25 @@ end do
 
 c=c/sqrt(dot_product(v1,v1))
 c2=c2/sqrt(dot_product(v2,v2))
-!write(0,*) 'v1',v1
-!write(0,*) 'v2',v2
+
+
+v1 = 0.d0
+v2 = 0.d0
+do i=1,n
+   ri = ref(:,i) - cog
+   v1 = v1 + c(i)*ri
+   v2 = v2 + c2(i)*ri
+end do
+
+!write(0,*) 'v1',v1,dot_product(v1,v1)
+!write(0,*) 'v2',v2,dot_product(v2,v2)
 !
-!write(0,*) 'd1',d1
-!write(0,*) 'd2',d2
-!
-!write(0,*)'dot(v1,d1)',dot_product(v1,d1/dot_product(d1,d1))&
-!         ,'dot(v2,d2)',dot_product(v2,d2/dot_product(d2,d2))
 !
 !write(0,*) 'c1',c
 !write(0,*) 'c2',c2
-
+!
 !pause
-
+!
 ! ----------------------------------------
 ! OUTPUT
 ! ----------------------------------------
@@ -75,12 +80,12 @@ end do
 
 end subroutine
 
-subroutine direction_vecs_ref_inv(n,ref,d1,d2_orig,cvec)
+subroutine direction_vecs_ref_inv(n,ref,d1_orig,d2_orig,cvec)
 implicit none
 
 integer,intent(in) :: n
-real(8),intent(in) :: d1(3),d2_orig(3)
-real(8)            :: d2(3)
+real(8),intent(in) :: d1_orig(3),d2_orig(3)
+real(8)            :: d1(3),d2(3)
 real(8),allocatable,intent(in)  :: ref(:,:)
 real(8),allocatable,intent(inout) :: cvec(:,:)
 
@@ -98,8 +103,11 @@ real(8) :: tmp1(3), tmp2(3)
 integer :: info, lwork, i, j
 
 !orthogonalisation of d2
-d2=d2_orig
+d1=d1_orig/norm2(d1_orig)
+d2=d2_orig/norm2(d2_orig)
 d2=d2-dot_product(d1,d2)/dot_product(d1,d1)*d1
+d2=d2/norm2(d2)
+
 if(allocated(cvec)) deallocate(cvec)
 allocate( cvec(2,n))
 ! ----------------------------------------
@@ -199,19 +207,19 @@ do i=1,n
    v2 = v2 + c2(i)*ri
 end do
 
-!write(0,*) 'v1',v1,dot_product(v1,v1)
-!write(0,*) 'v2',v2,dot_product(v2,v2)
-!
-!write(0,*) 'd1',d1/sqrt(dot_product(d1,d1))
-!write(0,*) 'd2',d2/sqrt(dot_product(d2,d2))
-!
-!write(0,*) dot_product(d1/sqrt(dot_product(d1,d1)),v1)
-!write(0,*) dot_product(d2/sqrt(dot_product(d2,d2)),v2)
-!
-!write(0,*),'dot(v1,v2)',dot_product(v1,v2),n,S
+write(0,*) 'v1',v1,dot_product(v1,v1)
+write(0,*) 'v2',v2,dot_product(v2,v2)
+
+write(0,*) 'd1',d1/sqrt(dot_product(d1,d1))
+write(0,*) 'd2',d2/sqrt(dot_product(d2,d2))
+
+write(0,*) dot_product(d1/sqrt(dot_product(d1,d1)),v1)
+write(0,*) dot_product(d2/sqrt(dot_product(d2,d2)),v2)
+
+write(0,*),'dot(v1,v2)',dot_product(v1,v2),n,S
 !pause      
-!write(0,*) 'c1',c
-!write(0,*) 'c2',c2
+write(0,*) 'c1',c
+write(0,*) 'c2',c2
 
 !pause
 

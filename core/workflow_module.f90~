@@ -43,10 +43,10 @@ end type project_workflow_type
 
     type :: library_run_params_type
         ! Initialisierung und Pruefung
-        logical :: initialize_sidechain_maps = .true.
-        logical :: compute_sidechain_frequencies = .true.
-        logical :: test_sidechain_maps = .true.
-        logical :: initialize_domain_maps = .true.
+        logical :: initialize_sidechain_cvs = .true.
+        !logical :: compute_sidechain_frequencies = .true.
+        !logical :: test_sidechain_maps = .true.
+        logical :: initialize_domain_cvs = .true.
         
         ! User-defined CV workflow steps
         logical :: initialize_user_cvs = .true.
@@ -81,7 +81,10 @@ end type project_workflow_type
        logical, allocatable :: sc_residue_filters(:)  ! Größe: Gesamtanzahl der Residuen / Instanzen
        logical, allocatable :: domain_filters(:)      ! Größe: dom_lib%ndo
        logical, allocatable :: user_cv_filters(:)     ! Größe: user_lib%n_cvs
-    end type library_workflow_type
+       logical :: use_sc_filters
+       logical :: use_dom_filters
+       logical :: use_user_filters
+     end type library_workflow_type
 
 !EULICIAN LIFTING
 type :: euclidean_lifting_model_params_type
@@ -249,39 +252,58 @@ end type
 
     
 
-!CV PLAN 
-type :: cv_plan_run_params_type
-        logical :: include_sidechain_cvs = .true.
-        logical :: include_domain_cvs   = .true.
+! Konfiguration für eine einzelne Sidechain-Bibliothek
+type :: sidechain_lib_config_type
+    character(len=1024) :: filename = 'sidechain_lib.txt'
+    integer :: selection_mode = 1 ! 1 = Alle, 2 = Spezifisch
+    logical, allocatable :: filters(:) ! Filter-Array für die CVs DIESER Bibliothek
+end type sidechain_lib_config_type
 
-        ! Auswahlmodus: 1 = Alle, 2 = Nur spezifische Indizes
-        integer :: sidechain_selection_mode = 1
-        integer :: domain_selection_mode    = 1
+! Konfiguration für eine einzelne Domain-Bibliothek
+type :: domain_lib_config_type
+    character(len=1024) :: filename = 'domain_lib.txt'
+    integer :: selection_mode = 1
+    logical, allocatable :: filters(:)
+end type domain_lib_config_type
 
-        ! Listen für spezifische Indizes (falls Modus 2)
-        integer, allocatable :: selected_sidechain_indices(:)
-        integer, allocatable :: selected_domain_indices(:)
-    end type cv_plan_run_params_type
+! Konfiguration für eine einzelne User-Bibliothek
+type :: user_lib_config_type
+    character(len=1024) :: filename = 'user_lib.txt'
+    integer :: selection_mode = 1
+    logical, allocatable :: filters(:)
+end type user_lib_config_type
 
-    ! --------------------------------------------------
-    ! I/O-Parameter für mehrere Bibliotheken
-    ! --------------------------------------------------
-    type :: cv_plan_io_params_type
-        integer :: n_sidechain_libs = 1
-        character(len=1024), allocatable :: sidechain_library_files(:)
+! Run- und I/O-Parameter zusammengefasst im Workflow-Typ
+type :: cv_plan_workflow_type
+    integer :: istate      =1
+    logical :: initialized = .false.
+    
+    logical :: include_sidechain_cvs = .true.
+    logical :: include_domain_cvs    = .true.
+    logical :: include_user_cvs      = .true.
 
-        integer :: n_domain_libs = 1
-        character(len=1024), allocatable :: domain_library_files(:)
-    end type cv_plan_io_params_type
+    !Ausgabedatei für den generierten CV-Plan
+    logical :: read_existing_cv_plan = .false.
+    character(len=1024) :: existing_cv_plan_filename = 'cv_plan.dat'
+    character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
 
-    ! --------------------------------------------------
-    ! Haupt-Typ für den CV-Plan-Workflow
-    ! --------------------------------------------------
-    type :: cv_plan_workflow_type
-        logical :: initialized = .false.
-        type(cv_plan_run_params_type) :: run_params
-        type(cv_plan_io_params_type)  :: io_params
-    end type cv_plan_workflow_type
+    ! Arrays von Bibliotheken (jede hat Dateiname, Modus und eigene Filter)
+    type(sidechain_lib_config_type), allocatable :: sidechain_libs(:)
+    type(domain_lib_config_type),    allocatable :: domain_libs(:)
+    type(user_lib_config_type),      allocatable :: user_libs(:)
+end type cv_plan_workflow_type
+
+type :: test_trajectory_selection_type
+    integer :: istate = 1
+    integer :: irep = 1
+    integer :: start_time_step = 1
+    integer :: end_time_step   = 1000
+    integer :: stride          = 1
+    
+    character(len=1024) :: test_trajectory_filename = 'test_traj.dat'
+    character(len=1024) :: cv_plan_filename         = 'cv_plan.dat'
+end type test_trajectory_selection_type
+
 
 contains
 

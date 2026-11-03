@@ -123,19 +123,18 @@ subroutine edit_euclidean_lifting_workflow(job)
         if (ios /= 0) error stop 'Invalid state index'
     end if
 
-    write(*,'(A,I0,A)', advance='no') '  Target replicate mode (1=All reps, 2=Specific rep) [', job%run_params%lift_rep_mode, ']: '
+    write(*,'(A,A,A)', advance='no') '  Replicate selector data filename [', &
+        trim(job%io_params%selector_file), ']: '
     read(*,'(A)') input
-    if (len_trim(input) > 0) then
-        read(input,*,iostat=ios) job%run_params%lift_rep_mode
-    end if
-
-    if (job%run_params%lift_rep_mode == 2) then
-        write(*,'(A,I0,A)', advance='no') '  Target replicate index [', job%run_params%lift_irep, ']: '
-        read(*,'(A)') input
-        if (len_trim(input) > 0) then
-            read(input,*,iostat=ios) job%run_params%lift_irep
-        end if
-    end if
+    if (len_trim(input) > 0) job%io_params%selector_file = trim(input)
+    write(*,'(A,A,A)', advance='no') '  CV plan filename [', &
+        trim(job%io_params%cv_plan_filename), ']: '
+    read(*,'(A)') input
+    if (len_trim(input) > 0) job%io_params%cv_plan_filename = trim(input)
+    write(*,'(A,A,A)', advance='no') '  Lifting plan output filename [', &
+        trim(job%io_params%lifting_plan_filename), ']: '
+    read(*,'(A)') input
+    if (len_trim(input) > 0) job%io_params%lifting_plan_filename = trim(input)
 
     ! --------------------------------------------------
     ! 2. PBC Correction Option
@@ -320,11 +319,21 @@ subroutine validate_euclidean_lifting_workflow(job)
     type(euclidean_lifting_workflow_type), intent(in) :: job
 
     if (job%run_params%lift_istate < 1) error stop 'Invalid workflow: lift_istate < 1'
-    if (job%run_params%lift_rep_mode == 2 .and. job%run_params%lift_irep < 1) then
-        error stop 'Invalid workflow: lift_irep < 1'
-    end if
     if (job%run_params%stride < 1) error stop 'Invalid workflow: stride < 1'
     if (job%run_params%size_block < 1) error stop 'Invalid workflow: size_block < 1'
+    if (len_trim(job%io_params%selector_file) == 0) then
+        error stop 'Invalid workflow: selector_file is empty'
+    end if
+    if (index(trim(job%io_params%selector_file), '/') /= 0 .or. &
+        index(trim(job%io_params%selector_file), achar(92)) /= 0) then
+        error stop 'Invalid workflow: selector_file must be a filename without a directory'
+    end if
+    if (len_trim(job%io_params%cv_plan_filename) == 0) then
+        error stop 'Invalid workflow: cv_plan_filename is empty'
+    end if
+    if (len_trim(job%io_params%lifting_plan_filename) == 0) then
+        error stop 'Invalid workflow: lifting_plan_filename is empty'
+    end if
 
     if (job%run_params%use_pbc_correction) then
         if (job%run_params%ref_irep < 1) error stop 'Invalid workflow: ref_irep < 1'
@@ -376,9 +385,6 @@ subroutine write_euclidean_lifting_workflow_unit(job, unit)
 
     write(unit, '(A)') '# Run parameters'
     write(unit, '(A,I0)') 'lift_istate = ', job%run_params%lift_istate
-    write(unit, '(A,I0)') 'lift_rep_mode = ', job%run_params%lift_rep_mode
-    write(unit, '(A,I0)') 'lift_irep = ', job%run_params%lift_irep
-
     call write_bool(unit, 'use_pbc_correction', job%run_params%use_pbc_correction)
 
     if (job%run_params%use_pbc_correction) then
@@ -400,6 +406,9 @@ subroutine write_euclidean_lifting_workflow_unit(job, unit)
 
     write(unit, '(A)') ''
     write(unit, '(A)') '# I/O parameters & paths'
+    call write_string(unit, 'selector_file', job%io_params%selector_file)
+    call write_string(unit, 'cv_plan_filename', job%io_params%cv_plan_filename)
+    call write_string(unit, 'lifting_plan_filename', job%io_params%lifting_plan_filename)
     call write_string(unit, 'output_policy', job%io_params%output_policy)
     call write_string(unit, 'centroid_path', job%io_params%centroid_path)
     call write_string(unit, 'centroid_prefix', job%io_params%centroid_prefix)
@@ -542,6 +551,15 @@ subroutine read_euclidean_lifting_workflow(job, filename)
         case ('execute_lifting')
             read(value, *, iostat=ios) job%run_params%execute_lifting
             call check_value_read(ios, line_number, key)
+
+        case ('selector_file')
+            job%io_params%selector_file = trim(value)
+
+        case ('cv_plan_filename')
+            job%io_params%cv_plan_filename = trim(value)
+
+        case ('lifting_plan_filename')
+            job%io_params%lifting_plan_filename = trim(value)
 
         case ('output_policy')
             job%io_params%output_policy = trim(value)

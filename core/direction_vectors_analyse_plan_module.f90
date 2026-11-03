@@ -50,6 +50,7 @@ subroutine destroy_cv_plan(plan)
 
 end subroutine destroy_cv_plan
 
+
 subroutine get_atoms_sidechain(istate,sc_lib,topologies,icv,num_freq,atoms)
 integer , intent(in)  :: icv,num_freq,istate
 integer  :: ires,nh,i
@@ -66,6 +67,8 @@ nh=sc_lib%residue(icv)%natom_head
 allocate(atoms(nh))
 ires=sc_lib%residue(icv)%res_ids(num_freq)
 
+ 
+
 do i=1,nh
           atoms(i) = &
                     sc_lib%residue(icv)%map(i) + &
@@ -73,7 +76,7 @@ do i=1,nh
                     acid_start_list(ires) - 1
                     
 end do                    
-                    
+
 end subroutine get_atoms_sidechain
 
 
@@ -238,7 +241,7 @@ enddo
 ! ---------------------------------------------------------
 ! Arrays ersetzen
 ! ---------------------------------------------------------
-
+write(0,*) atoms,'atoms'
 call move_alloc(object_tmp,plan%object)
 call move_alloc(term_tmp,plan%term)
 
@@ -415,7 +418,7 @@ type(cv_term),   allocatable :: term_tmp(:)
 n = size(atoms)
 
 if (size(cv,2) /= n) then
-    write(0,*) 'ERROR add_user_cv_pair: inconsistent sizes'
+    write(0,*) 'ERROR add_user_cv_pair: inconsistent sizes',size(cv,2) ,n
     stop
 endif
 

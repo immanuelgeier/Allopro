@@ -3,6 +3,18 @@ use path_module
 
 implicit none
 
+character(len=40), parameter :: seed_workflow_config_stem = 'seed_workflow'
+character(len=40), parameter :: trajectory_settings_workflow_config_stem = 'trajectory_settings_workflow'
+character(len=40), parameter :: replicate_selector_workflow_config_stem = 'replicate_selector_workflow'
+character(len=40), parameter :: library_workflow_config_stem = 'library_workflow'
+character(len=40), parameter :: cv_plan_workflow_config_stem = 'cv_plan_workflow'
+character(len=40), parameter :: test_trajectory_workflow_config_stem = 'test_trajectory_workflow'
+character(len=40), parameter :: graphical_representation_workflow_config_stem = &
+    'graphical_representation_workflow'
+character(len=40), parameter :: master_workflow_config_stem = 'master_workflow'
+character(len=40), parameter :: euclidean_lifting_workflow_config_stem = 'euclidean_lifting_workflow'
+character(len=*), parameter :: preedited_library_prefix = 'pre_'
+
 type :: project_workflow_type
     logical :: initialized = .false.
     logical :: load_checkpoint = .false.
@@ -43,10 +55,10 @@ end type project_workflow_type
 
     type :: library_run_params_type
         ! Initialisierung und Pruefung
-        logical :: initialize_sidechain_maps = .true.
-        logical :: compute_sidechain_frequencies = .true.
-        logical :: test_sidechain_maps = .true.
-        logical :: initialize_domain_maps = .true.
+        logical :: initialize_sidechain_cvs = .true.
+        !logical :: compute_sidechain_frequencies = .true.
+        !logical :: test_sidechain_maps = .true.
+        logical :: initialize_domain_cvs = .true.
         
         ! User-defined CV workflow steps
         logical :: initialize_user_cvs = .true.
@@ -81,7 +93,10 @@ end type project_workflow_type
        logical, allocatable :: sc_residue_filters(:)  ! Größe: Gesamtanzahl der Residuen / Instanzen
        logical, allocatable :: domain_filters(:)      ! Größe: dom_lib%ndo
        logical, allocatable :: user_cv_filters(:)     ! Größe: user_lib%n_cvs
-    end type library_workflow_type
+       logical :: use_sc_filters
+       logical :: use_dom_filters
+       logical :: use_user_filters
+     end type library_workflow_type
 
 !EULICIAN LIFTING
 type :: euclidean_lifting_model_params_type
@@ -119,6 +134,9 @@ end type euclidean_lifting_run_params_type
 
 
 type :: euclidean_lifting_io_params_type
+    character(len=1024) :: selector_file   = 'replicate_selector.dat'
+    character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+    character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
     character(len=1024) :: centroid_path   = '.'
     character(len=256)  :: centroid_prefix = 'centroid'
 
@@ -249,45 +267,149 @@ end type
 
     
 
-!CV PLAN 
+! Konfiguration für eine einzelne Sidechain-Bibliothek
+type :: sidechain_lib_config_type
+    character(len=1024) :: filename = 'sidechain_lib.txt'
+    integer :: selection_mode = 1 ! 1 = Alle, 2 = Spezifisch
+    logical, allocatable :: filters(:) ! Filter-Array für die CVs DIESER Bibliothek
+end type sidechain_lib_config_type
 
-    ! Konfiguration für eine einzelne Sidechain-Bibliothek
-    type :: sidechain_lib_config_type
-        character(len=1024) :: filename = 'sidechain_lib.txt'
-        integer :: selection_mode = 1 ! 1 = Alle, 2 = Spezifisch
-        logical, allocatable :: filters(:) ! Filter-Array für die CVs DIESER Bibliothek
-    end type sidechain_lib_config_type
+! Konfiguration für eine einzelne Domain-Bibliothek
+type :: domain_lib_config_type
+    character(len=1024) :: filename = 'domain_lib.txt'
+    integer :: selection_mode = 1
+    logical, allocatable :: filters(:)
+end type domain_lib_config_type
 
-    ! Konfiguration für eine einzelne Domain-Bibliothek
-    type :: domain_lib_config_type
-        character(len=1024) :: filename = 'domain_lib.txt'
-        integer :: selection_mode = 1
-        logical, allocatable :: filters(:)
-    end type domain_lib_config_type
+! Konfiguration für eine einzelne User-Bibliothek
+type :: user_lib_config_type
+    character(len=1024) :: filename = 'user_lib.txt'
+    integer :: selection_mode = 1
+    logical, allocatable :: filters(:)
+end type user_lib_config_type
 
-    ! Konfiguration für eine einzelne User-Bibliothek
-    type :: user_lib_config_type
-        character(len=1024) :: filename = 'user_lib.txt'
-        integer :: selection_mode = 1
-        logical, allocatable :: filters(:)
-    end type user_lib_config_type
+! Run- und I/O-Parameter zusammengefasst im Workflow-Typ
+type :: cv_plan_workflow_type
+    integer :: istate      =1
+    logical :: initialized = .false.
+    
+    logical :: include_sidechain_cvs = .true.
+    logical :: include_domain_cvs    = .true.
+    logical :: include_user_cvs      = .true.
 
-    ! Run- und I/O-Parameter zusammengefasst im Workflow-Typ
-    type :: cv_plan_workflow_type
-        logical :: initialized = .false.
-        
-        logical :: include_sidechain_cvs = .true.
-        logical :: include_domain_cvs    = .true.
-        logical :: include_user_cvs      = .true.
+    !Ausgabedatei für den generierten CV-Plan
+    logical :: read_existing_cv_plan = .false.
+    character(len=1024) :: existing_cv_plan_filename = 'cv_plan.dat'
+    character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
 
-        ! Arrays von Bibliotheken (jede hat Dateiname, Modus und eigene Filter)
-        type(sidechain_lib_config_type), allocatable :: sidechain_libs(:)
-        type(domain_lib_config_type),    allocatable :: domain_libs(:)
-        type(user_lib_config_type),      allocatable :: user_libs(:)
-    end type cv_plan_workflow_type
+    ! Arrays von Bibliotheken (jede hat Dateiname, Modus und eigene Filter)
+    type(sidechain_lib_config_type), allocatable :: sidechain_libs(:)
+    type(domain_lib_config_type),    allocatable :: domain_libs(:)
+    type(user_lib_config_type),      allocatable :: user_libs(:)
+end type cv_plan_workflow_type
+
+type :: test_trajectory_selection_type
+    integer :: istate = 1
+    integer :: irep = 1
+    integer :: start_time_step = 1
+    integer :: end_time_step   = 1000
+    integer :: stride          = 1
+    
+    character(len=1024) :: test_trajectory_filename = 'test_raw_cv_traj.dat'
+    character(len=1024) :: cv_plan_filename         = 'cv_plan.dat'
+end type test_trajectory_selection_type
+
+type :: graphical_representation_params_type
+        character(len=2048) :: pdb_file      = "cv_raw.pdb"
+        character(len=2048) :: tcl_script    = "cv_raw.tcl"
+        integer             :: replica_index = 1
+        integer             :: time_index    = 1
+        real                :: scale         = 1.0 
+        character(len=2048) :: cv_plan_file  = "cv_plan.dat"
+        integer             :: state_index   = 1   
+    end type graphical_representation_params_type
+
+    ! ============================================================
+    ! WORKFLOW-TYP
+    ! ============================================================
+    type :: graphical_representation_workflow_type
+        type(graphical_representation_params_type) :: params
+    end type graphical_representation_workflow_type
+
 contains
 
+function library_filename_for_finalization(filename, finalized) result(selected_filename)
+    character(len=*), intent(in) :: filename
+    logical, intent(in) :: finalized
+    character(len=1024) :: selected_filename
+    character(len=1024) :: directory, basename
+    integer :: separator
+    logical :: already_preedited
 
+    directory = ''
+    basename = trim(adjustl(filename))
+    separator = max(index(trim(basename), '/', back=.true.), &
+                    index(trim(basename), achar(92), back=.true.))
+    if (separator > 0) then
+        directory = basename(:separator)
+        basename = basename(separator + 1:)
+    end if
+
+    if (len_trim(basename) == 0) error stop 'Cannot select an empty library filename'
+
+    already_preedited = index(trim(basename), preedited_library_prefix) == 1
+    if (already_preedited) then
+        basename = basename(len(preedited_library_prefix) + 1:)
+    end if
+    if (len_trim(basename) == 0) error stop 'Cannot select a library filename with an empty basename'
+
+    if (len_trim(directory) + len_trim(basename) + len(preedited_library_prefix) > &
+        len(selected_filename)) then
+        error stop 'Selected library filename is too long'
+    end if
+
+    if (finalized) then
+        selected_filename = trim(directory)//trim(basename)
+    else
+        selected_filename = trim(directory)//preedited_library_prefix//trim(basename)
+    end if
+end function library_filename_for_finalization
+
+logical function is_preedited_library_filename(filename)
+    character(len=*), intent(in) :: filename
+    character(len=1024) :: basename
+    integer :: separator
+
+    basename = trim(adjustl(filename))
+    separator = max(index(trim(basename), '/', back=.true.), &
+                    index(trim(basename), achar(92), back=.true.))
+    if (separator > 0) basename = basename(separator + 1:)
+    is_preedited_library_filename = index(trim(basename), preedited_library_prefix) == 1
+end function is_preedited_library_filename
+
+
+function workflow_config_filename(prefix, standard_name) result(filename)
+    character(len=*), intent(in) :: prefix, standard_name
+    character(len=1024) :: filename
+    character(len=1024) :: normalized_prefix
+    integer :: prefix_length
+
+    normalized_prefix = trim(adjustl(prefix))
+    prefix_length = len_trim(normalized_prefix)
+    do while (prefix_length > 0)
+        if (normalized_prefix(prefix_length:prefix_length) /= '_') exit
+        prefix_length = prefix_length - 1
+    end do
+
+    if (prefix_length == 0) then
+        filename = trim(standard_name) // '.cfg'
+    else
+        if (prefix_length + 1 + len_trim(standard_name) + 4 > len(filename)) then
+            error stop 'Workflow configuration filename is too long.'
+        end if
+        filename = normalized_prefix(:prefix_length) // '_' // trim(standard_name) // '.cfg'
+    end if
+end function workflow_config_filename
 
 
 end module

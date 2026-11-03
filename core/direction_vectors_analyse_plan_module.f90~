@@ -1,9 +1,9 @@
 module direction_vectors_analyse_plan_module
 
-
 use topology_module
 use sidechains
 use domains_module
+use user_defined_cv_module
 use project_module
 use time_window_file_mapping
 use time_window_loader
@@ -40,6 +40,8 @@ end type
 
 contains
 
+
+
 subroutine destroy_cv_plan(plan)
     type(cv_plan), intent(inout) :: plan
 
@@ -64,6 +66,8 @@ nh=sc_lib%residue(icv)%natom_head
 allocate(atoms(nh))
 ires=sc_lib%residue(icv)%res_ids(num_freq)
 
+ 
+
 do i=1,nh
           atoms(i) = &
                     sc_lib%residue(icv)%map(i) + &
@@ -71,7 +75,7 @@ do i=1,nh
                     acid_start_list(ires) - 1
                     
 end do                    
-                    
+
 end subroutine get_atoms_sidechain
 
 
@@ -95,6 +99,27 @@ do i=1,nh
 end do                    
                     
 end subroutine get_atoms_domaine
+
+subroutine get_atoms_user_cv(istate,user_lib,topologies,icv,atoms)
+integer , intent(in)  :: icv,istate
+integer  :: ires,nh,i
+
+integer, allocatable,intent(out):: atoms(:)
+type(topology_set_type), intent(in)      :: topologies
+type(user_cv_library_type), intent(inout) :: user_lib
+
+
+nh=user_lib%cvs(icv)%natom
+allocate(atoms(nh))
+
+do i=1,nh
+          atoms(i)  =  user_lib%cvs(icv)%map(i) + &
+            user_lib%cvs(icv)%start_atom - 1
+                    
+end do                    
+                    
+end subroutine get_atoms_user_cv
+            
             
             
 subroutine add_cv_pair_sidechain(plan, object_type, resid, refid, &
@@ -215,7 +240,7 @@ enddo
 ! ---------------------------------------------------------
 ! Arrays ersetzen
 ! ---------------------------------------------------------
-
+write(0,*) atoms,'atoms'
 call move_alloc(object_tmp,plan%object)
 call move_alloc(term_tmp,plan%term)
 
@@ -343,276 +368,6 @@ call move_alloc(term_tmp,plan%term)
 
 end subroutine add_domain_cv_pair
 
-
-subroutine make_cv_plan_ref_variants( &
-    topologies, sc_lib, dom_lib, plan, &
-    ref_block, ref_time, istate)
-
-implicit none
-
-type(topology_set_type), intent(in)      :: topologies
-type(sidechain_library_type), intent(inout) :: sc_lib
-type(domain_library_type), intent(in)    :: dom_lib
-type(cv_plan), intent(out)               :: plan
-type(raw_data_block), intent(in)         :: ref_block
-
-integer, intent(in) :: ref_time
-integer, intent(in) :: istate
-
-integer :: nterm, nobj
-integer :: i,j,k
-integer :: ncvtype
-integer :: ires, iref
-integer :: atom
-integer :: term_idx, obj_idx
-
-integer :: nres_type
-
-
-nterm = 0
-nobj  = 0
-
-
-do i = 1, dom_lib%ndo
-
-    nobj = nobj + 1
-
-    nterm = nterm + &
-            2 * dom_lib%domain(i)%natom_keep
-
-end do
-
-
-!---------------------------------------------------------
-! Residuen:
-!
-! Für jeden CV-Typ:
-!     jede mögliche Referenz
-!     × jedes Ziel-Residuum
-!
-!---------------------------------------------------------
-
-do ncvtype = 1, size(sc_lib%residue)
-
-    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
-
-    nres_type = sc_lib%residue(ncvtype)%freq
-
-    nobj = nobj + nres_type * nres_type
-
-    nterm = nterm + &
-            nres_type * nres_type * &
-            2 * sc_lib%residue(ncvtype)%natom_head
-
-end do
-
-
-allocate(plan%term(nterm))
-allocate(plan%object(nobj))
-
-
-!=========================================================
-! 2) Domains
-!=========================================================
-
-term_idx = 0
-obj_idx  = 0
-
-
-do i = 1, dom_lib%ndo
-
-    obj_idx = obj_idx + 1
-
-    plan%object(obj_idx)%object_type = 1
-    plan%object(obj_idx)%object_id   = i
-    plan%object(obj_idx)%domid       = i
-    plan%object(obj_idx)%resid       = 0
-    plan%object(obj_idx)%refid       = 0
-
-    call make_domain_names( &
-        plan%object(obj_idx)%name, &
-        dom_lib%domain(i)%domain_name)
-
-    plan%object(obj_idx)%first_term = term_idx + 1
-
-    !-----------------------------------------------------
-    ! CV1
-    !-----------------------------------------------------
-
-    do j = 1, dom_lib%domain(i)%natom_keep
-
-        term_idx = term_idx + 1
-
-        plan%term(term_idx)%atom = &
-            dom_lib%domain(i)%map(j) + &
-            dom_lib%domain(i)%start_atom - 1
-
-        plan%term(term_idx)%target = obj_idx
-        plan%term(term_idx)%comp   = 1
-
-        plan%term(term_idx)%coeff = &
-            dom_lib%domain(i)%cv(1,j)
-
-    end do
-
-
-    !-----------------------------------------------------
-    ! CV2
-    !-----------------------------------------------------
-
-    do j = 1, dom_lib%domain(i)%natom_keep
-
-        term_idx = term_idx + 1
-
-        plan%term(term_idx)%atom = &
-            dom_lib%domain(i)%map(j) + &
-            dom_lib%domain(i)%start_atom - 1
-
-        plan%term(term_idx)%target = obj_idx
-        plan%term(term_idx)%comp   = 2
-
-        plan%term(term_idx)%coeff = &
-            dom_lib%domain(i)%cv(2,j)
-
-    end do
-
-    plan%object(obj_idx)%last_term = term_idx
-    plan%object(obj_idx)%point_group = 'none'
-
-end do
-
-
-!=========================================================
-! 3) Residuen
-!=========================================================
-
-do ncvtype = 1, size(sc_lib%residue)
-
-    if (.not. allocated(sc_lib%residue(ncvtype)%cv)) cycle
-
-    nres_type = sc_lib%residue(ncvtype)%freq
-
-
-    !=====================================================
-    ! Jede mögliche Referenz
-    !=====================================================
-
-    do k = 1, nres_type
-
-        !-------------------------------------------------
-        ! k-te Referenz
-        !-------------------------------------------------
-
-        iref = sc_lib%residue(ncvtype)%res_ids(k)
-
-        !call ref_from_frame_single_res( &
-        !    ref_time, &
-        !    istate, &
-        !    ncvtype, &
-        !    iref, &
-        !    sc_lib, &
-        !    topologies, &
-        !    ref_block)
-
-
-        !=================================================
-        ! Alle Ziel-Residuen
-        !=================================================
-
-        do j = 1, nres_type
-
-            ires = sc_lib%residue(ncvtype)%res_ids(j)
-
-            obj_idx = obj_idx + 1
-
-            plan%object(obj_idx)%object_type = 2
-            plan%object(obj_idx)%object_id   = ires
-
-            ! Ziel
-            plan%object(obj_idx)%resid = ires
-
-            ! Referenz
-            plan%object(obj_idx)%refid = iref
-
-            plan%object(obj_idx)%first_term = term_idx + 1
-
-
-            call make_cv_names( &
-                plan%object(obj_idx)%name, &
-                sc_lib%residue(ncvtype)%resname, &
-                ires)
-
-
-            if (sc_lib%residue(ncvtype)%has_sym) then
-                plan%object(obj_idx)%point_group = 'C2  '
-            else
-                plan%object(obj_idx)%point_group = 'none'
-            end if
-
-
-            !---------------------------------------------
-            ! CV1
-            !---------------------------------------------
-
-            do i = 1, sc_lib%residue(ncvtype)%natom_head
-
-                term_idx = term_idx + 1
-
-                atom = &
-                    sc_lib%residue(ncvtype)%map(i) + &
-                    topologies%state(istate)%topo% &
-                    acid_start_list(ires) - 1
-
-                plan%term(term_idx)%atom   = atom
-                plan%term(term_idx)%target = obj_idx
-                plan%term(term_idx)%comp   = 1
-
-                plan%term(term_idx)%coeff = &
-                    sc_lib%residue(ncvtype)%cv(1,i)
-
-                plan%term(term_idx)%has_c2_sym = &
-                    sc_lib%residue(ncvtype)%has_sym
-
-            end do
-
-
-            !---------------------------------------------
-            ! CV2
-            !---------------------------------------------
-
-            do i = 1, sc_lib%residue(ncvtype)%natom_head
-
-                term_idx = term_idx + 1
-
-                atom = &
-                    sc_lib%residue(ncvtype)%map(i) + &
-                    topologies%state(istate)%topo% &
-                    acid_start_list(ires) - 1
-
-                plan%term(term_idx)%atom   = atom
-                plan%term(term_idx)%target = obj_idx
-                plan%term(term_idx)%comp   = 2
-
-                plan%term(term_idx)%coeff = &
-                    sc_lib%residue(ncvtype)%cv(2,i)
-
-                plan%term(term_idx)%has_c2_sym = &
-                    sc_lib%residue(ncvtype)%has_sym
-
-            end do
-
-
-            plan%object(obj_idx)%last_term = term_idx
-
-        end do
-
-    end do
-
-end do
-
-
-end subroutine make_cv_plan_ref_variants
-
 subroutine make_cv_names(names, basename, id)
 
     implicit none
@@ -636,6 +391,126 @@ subroutine make_domain_names(names, basename)
     names(2) = trim(basename)//'_2'
 
 end subroutine make_domain_names
+
+subroutine add_user_cv_pair(plan, istate, name, atoms, cv)
+
+implicit none
+
+type(cv_plan), intent(inout) :: plan
+
+integer, intent(in) :: istate
+
+character(len=*), intent(in) :: name(2)
+
+integer, intent(in) :: atoms(:)
+real(8), intent(in) :: cv(:,:)
+
+integer :: old_nobj
+integer :: old_nterm
+integer :: n
+integer :: i
+integer :: object_id
+
+type(cv_object), allocatable :: object_tmp(:)
+type(cv_term),   allocatable :: term_tmp(:)
+
+n = size(atoms)
+
+if (size(cv,2) /= n) then
+    write(0,*) 'ERROR add_user_cv_pair: inconsistent sizes',size(cv,2) ,n
+    stop
+endif
+
+! ---------------------------------------------------------
+! Alte Größen
+! ---------------------------------------------------------
+
+if (allocated(plan%object)) then
+    old_nobj = size(plan%object)
+else
+    old_nobj = 0
+endif
+
+if (allocated(plan%term)) then
+    old_nterm = size(plan%term)
+else
+    old_nterm = 0
+endif
+
+object_id = old_nobj + 1
+
+! ---------------------------------------------------------
+! Neue Arrays
+! ---------------------------------------------------------
+
+allocate(object_tmp(old_nobj+1))
+allocate(term_tmp(old_nterm+2*n))
+
+! ---------------------------------------------------------
+! Alte Daten kopieren
+! ---------------------------------------------------------
+
+if (old_nobj > 0) then
+    object_tmp(1:old_nobj) = plan%object
+endif
+
+if (old_nterm > 0) then
+    term_tmp(1:old_nterm) = plan%term
+endif
+
+! ---------------------------------------------------------
+! Neues Object (object_type = 3 für User-CVs, analog zu Domains/Sidechains)
+! ---------------------------------------------------------
+
+object_tmp(old_nobj+1)%object_type = 3
+object_tmp(old_nobj+1)%object_id   = object_id
+!object_tmp(old_nobj+1)%istate      = istate
+object_tmp(old_nobj+1)%resid       = 0
+object_tmp(old_nobj+1)%refid       = 0
+
+object_tmp(old_nobj+1)%first_term = old_nterm + 1
+object_tmp(old_nobj+1)%last_term  = old_nterm + 2*n
+
+object_tmp(old_nobj+1)%point_group = 'none'
+object_tmp(old_nobj+1)%name        = name
+
+! ---------------------------------------------------------
+! CV1
+! ---------------------------------------------------------
+
+do i=1,n
+
+    term_tmp(old_nterm+i)%atom       = atoms(i)
+    term_tmp(old_nterm+i)%target     = old_nobj+1
+    term_tmp(old_nterm+i)%comp       = 1
+    term_tmp(old_nterm+i)%coeff      = cv(1,i)
+    term_tmp(old_nterm+i)%has_c2_sym = .false.
+
+enddo
+
+! ---------------------------------------------------------
+! CV2
+! ---------------------------------------------------------
+
+do i=1,n
+
+    term_tmp(old_nterm+n+i)%atom       = atoms(i)
+    term_tmp(old_nterm+n+i)%target     = old_nobj+1
+    term_tmp(old_nterm+n+i)%comp       = 2
+    term_tmp(old_nterm+n+i)%coeff      = cv(2,i)
+    term_tmp(old_nterm+n+i)%has_c2_sym = .false.
+
+enddo
+
+! ---------------------------------------------------------
+! Arrays ersetzen
+! ---------------------------------------------------------
+
+call move_alloc(object_tmp,plan%object)
+call move_alloc(term_tmp,plan%term)
+
+end subroutine add_user_cv_pair
+
 
 subroutine make_cv_plan(topologies,sc_lib,dom_lib,plan)
 implicit none

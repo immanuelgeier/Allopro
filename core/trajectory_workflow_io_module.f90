@@ -1,4 +1,5 @@
 module trajectory_workflow_io_module
+    use workflow_module, only: workflow_config_filename, trajectory_settings_workflow_config_stem
     use iso_fortran_env, only: output_unit, error_unit
     use project_module, only: project_type,analyze_project_frames
     use topology_module, only: topology_set_type
@@ -180,13 +181,9 @@ contains
 
         ! 5. Den Workflow selbst als .cfg-Datei abspeichern (für den Master-Plan)
         write(*,*)
-        write(*,'(A,A,A)', advance='no') 'Save workflow configuration as [trajectory_workflow.cfg]: '
+        write(*,'(A)', advance='no') 'Workflow file prefix (blank for no prefix): '
         read(*,'(A)') input
-        if (len_trim(input) == 0) then
-            workflow_cfg_filename = 'trajectory_workflow.cfg'
-        else
-            workflow_cfg_filename = trim(adjustl(input))
-        end if
+        workflow_cfg_filename = workflow_config_filename(trim(input), trajectory_settings_workflow_config_stem)
 
         call write_trajectory_workflow(job, trim(workflow_cfg_filename))
         write(*, '(3A)') '-> Trajectory workflow configuration written to "', trim(workflow_cfg_filename), '"'

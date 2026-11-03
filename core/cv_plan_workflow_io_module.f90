@@ -1,6 +1,8 @@
 module cv_plan_workflow_io_module
 
-    use workflow_module, only: cv_plan_workflow_type, sidechain_lib_config_type, domain_lib_config_type, user_lib_config_type
+    use workflow_module, only: cv_plan_workflow_type, sidechain_lib_config_type, domain_lib_config_type, &
+        user_lib_config_type, workflow_config_filename, cv_plan_workflow_config_stem, &
+        library_filename_for_finalization, is_preedited_library_filename
     use iso_fortran_env, only: output_unit, error_unit
 
     implicit none
@@ -15,11 +17,12 @@ module cv_plan_workflow_io_module
 
 contains
 
-subroutine configure_cv_plan_workflow(job)
-    implicit none
+subroutine configure_cv_plan_workflow(job,topologies)
+use topology_module    
+implicit none
 
     type(cv_plan_workflow_type), intent(out) :: job
-
+    type(topology_set_type),intent(in) :: topologies
     character(len=1024) :: filename
     character(len=32)   :: input
     integer :: choice, ios
@@ -58,7 +61,7 @@ subroutine configure_cv_plan_workflow(job)
         job%user_libs(1)%filename = 'user_lib.txt'
         job%user_libs(1)%selection_mode = 1
 
-        call edit_cv_plan_workflow(job)
+        call edit_cv_plan_workflow(job,topologies)
 
     case (2)
         write(*,'(A)', advance='no') 'Configuration filename: '
@@ -67,7 +70,8 @@ subroutine configure_cv_plan_workflow(job)
         if (len_trim(filename) == 0) error stop 'No configuration filename specified'
 
         call read_cv_plan_workflow(job, trim(filename))
-        call edit_cv_plan_workflow(job)
+        call edit_cv_plan_workflow(job, topologies)
+
         job%initialized = .true.
 
     case (3)
@@ -96,24 +100,25 @@ subroutine configure_cv_plan_workflow(job)
 
 end subroutine configure_cv_plan_workflow
 
-
-subroutine edit_cv_plan_workflow(job)
+subroutine edit_cv_plan_workflow(job,topologies)
     use sidechains 
     use domains_module
     use user_defined_cv_module
+    use topology_module
     implicit none
 
     type(cv_plan_workflow_type), intent(inout) :: job
 
     character(len=1024) :: input, filename
     character(len=32)   :: cname
-    integer :: ios, i, k, n, n_libs, sc_mode, rid
-    logical :: save_config, has_user_lib
+    integer :: ios, i, k, n, n_libs, sc_mode, rid, total_instances, idx
+    logical :: save_config, has_user_lib, current_val
 
     ! Temporäre Bibliotheks-Objekte zum Auslesen der Namen/Strukturen
     type(sidechain_library_type) :: sc_lib
     type(domain_library_type)    :: dom_lib
     type(user_cv_library_type)   :: user_lib
+    type(topology_set_type), intent(in)        :: topologies
 
     write(*,*)
     write(*,*) '======================================'
@@ -121,7 +126,40 @@ subroutine edit_cv_plan_workflow(job)
     write(*,*) '======================================'
     write(*,*) 'Press Enter to keep the current value.'
     write(*,*)
+    
+    ! --- Option: Vorhandenen CV Plan direkt einlesen ---
+    write(*,'(A,L1,A)', advance='no') 'Read from an existing CV plan file directly? [', job%read_existing_cv_plan, ']: '
+    read(*,'(A)') input
+    if (len_trim(input) > 0) then
+        read(input,*,iostat=ios) job%read_existing_cv_plan
+        if (ios /= 0) job%read_existing_cv_plan = .false.
+    end if
 
+    if (job%read_existing_cv_plan) then
+        write(*,'(A,A,A)', advance='no') 'Existing CV plan filename [', trim(job%existing_cv_plan_filename), ']: '
+        read(*,'(A)') input
+        if (len_trim(input) > 0) then
+            job%existing_cv_plan_filename = trim(input)
+        end if
+        write(*,*) '-> Mode set to load existing CV plan. Skipping library filters.'
+        goto 999 
+    end if
+    
+    write(*,'(A,A,A)', advance='no') 'CV plan output filename [', trim(job%cv_plan_filename), ']: '
+    read(*,'(A)') input
+    if (len_trim(input) > 0) then
+        job%cv_plan_filename = trim(input)
+    end if
+    
+    ! --- Option: Zustand / istate ---
+    write(*,'(A,I0,A)', advance='no') 'Workflow istate [', job%istate, ']: '
+    read(*,'(A)') input
+    if (len_trim(input) > 0) then
+        read(input,*,iostat=ios) job%istate
+        if (ios /= 0) error stop 'Invalid integer value for istate'
+    end if
+    write(*,*)
+    
     ! --------------------------------------------------
     ! 1. Sidechain Library Files Setup
     ! --------------------------------------------------
@@ -151,6 +189,7 @@ subroutine edit_cv_plan_workflow(job)
         if (len_trim(input) > 0) then
             job%sidechain_libs(i)%filename = trim(input)
         end if
+        call prompt_library_finalization(job%sidechain_libs(i)%filename, 'sidechain')
     end do
 
     ! --------------------------------------------------
@@ -183,6 +222,7 @@ subroutine edit_cv_plan_workflow(job)
         if (len_trim(input) > 0) then
             job%domain_libs(i)%filename = trim(input)
         end if
+        call prompt_library_finalization(job%domain_libs(i)%filename, 'domain')
     end do
 
     ! --------------------------------------------------
@@ -215,6 +255,7 @@ subroutine edit_cv_plan_workflow(job)
         if (len_trim(input) > 0) then
             job%user_libs(i)%filename = trim(input)
         end if
+        call prompt_library_finalization(job%user_libs(i)%filename, 'user-defined')
     end do
 
     ! ==========================================================
@@ -237,11 +278,13 @@ subroutine edit_cv_plan_workflow(job)
     if (job%include_sidechain_cvs .and. allocated(job%sidechain_libs)) then
         do i = 1, size(job%sidechain_libs)
             filename = job%sidechain_libs(i)%filename
-            
-            
-            ios=0	
-            call read_sidechain_library(trim(filename),sc_lib)
-            if (ios /= 0) then
+ call init_resnames_and_sidechain_head_groups(sc_lib)
+ call init_sidechain_head(sc_lib)
+ call compute_freq_and_resids(sc_lib, job%istate, topologies)
+ !call init_sidechain_maps(topologies%state(job%istate), sc_lib)
+ write(0,*) 'reading:  ', trim(filename)
+ call read_sidechain_library(trim(filename), sc_lib)
+            if (sc_lib%ncv <= 0) then
                 write(*,*) 'Warning: Could not read sidechain library file "', trim(filename), '". Skipping filter.'
                 cycle
             end if
@@ -252,69 +295,101 @@ subroutine edit_cv_plan_workflow(job)
             write(*,*) '  2 = Disable ALL sidechains'
             write(*,*) '  3 = Configure by sidechain type (e.g. all PHE, all ARG)'
             write(*,*) '  4 = Configure individual sidechain instances (detailed)'
-            write(*,'(A)', advance='no') 'Select sidechain configuration mode [3]: '
+            write(*,'(A,I0,A)', advance='no') 'Select sidechain configuration mode [', job%sidechain_libs(i)%selection_mode, ']: '
             read(*,'(A)') input
             
-            sc_mode = 3
+            sc_mode = job%sidechain_libs(i)%selection_mode
             if (len_trim(input) > 0) then
                 read(input, *, iostat=ios) sc_mode
                 if (ios /= 0) sc_mode = 3
             end if
             job%sidechain_libs(i)%selection_mode = sc_mode
 
-            if (allocated(job%sidechain_libs(i)%filters)) deallocate(job%sidechain_libs(i)%filters)
-            allocate(job%sidechain_libs(i)%filters(sc_lib%ncv))
-            job%sidechain_libs(i)%filters(:) = .true.
-
             select case (sc_mode)
             case (1)
+                if (allocated(job%sidechain_libs(i)%filters)) deallocate(job%sidechain_libs(i)%filters)
+                allocate(job%sidechain_libs(i)%filters(sc_lib%ncv))
                 job%sidechain_libs(i)%filters(:) = .true.
                 write(*,*) '-> All sidechains enabled for this library.'
 
             case (2)
+                if (allocated(job%sidechain_libs(i)%filters)) deallocate(job%sidechain_libs(i)%filters)
+                allocate(job%sidechain_libs(i)%filters(sc_lib%ncv))
                 job%sidechain_libs(i)%filters(:) = .false.
                 write(*,*) '-> All sidechains disabled for this library.'
 
             case (3)
+                if (.not. allocated(job%sidechain_libs(i)%filters) .or. size(job%sidechain_libs(i)%filters) /= sc_lib%ncv) then
+                    if (allocated(job%sidechain_libs(i)%filters)) deallocate(job%sidechain_libs(i)%filters)
+                    allocate(job%sidechain_libs(i)%filters(sc_lib%ncv))
+                    job%sidechain_libs(i)%filters(:) = .true.
+                end if
+
                 write(*,*)
                 write(*,*) '--- Configure Sidechains by Residue Type ---'
                 do k = 1, sc_lib%ncv
                     cname = sc_lib%residue(k)%resname
-                    write(*,'(A,I4,A,A3,A)', advance='no') '  [Type ', k, '] Include all ', cname, ' sidechains? [y] (y/n): '
+                    current_val = job%sidechain_libs(i)%filters(k)
+                    
+                    write(*,'(A,I4,A,A3,A,L1,A)', advance='no') '  [Type ', k, '] Include all ', cname, ' sidechains? [', current_val, '] (y/n): '
                     read(*,'(A)') input
                     if (len_trim(input) > 0) then
                         input = trim(adjustl(input))
                         if (input == 'n' .or. input == 'N' .or. input == 'no') then
                             job%sidechain_libs(i)%filters(k) = .false.
+                        else if (input == 'y' .or. input == 'Y' .or. input == 'yes') then
+                            job%sidechain_libs(i)%filters(k) = .true.
                         end if
                     end if
                 end do
 
-            case (4)
+           case (4)
+                ! Gesamtzahl aller individuellen Instanzen ermitteln (90+)
+                total_instances = 0
+                do k = 1, sc_lib%ncv
+                    if (allocated(sc_lib%residue(k)%res_ids)) then
+                        total_instances = total_instances + size(sc_lib%residue(k)%res_ids)
+                    end if
+                end do
+
+                ! Sicherer Check: Erst prüfen ob allokiert, danach erst die Größe vergleichen
+                if (.not. allocated(job%sidechain_libs(i)%filters)) then
+                    allocate(job%sidechain_libs(i)%filters(total_instances))
+                    job%sidechain_libs(i)%filters(:) = .true.
+                else if (size(job%sidechain_libs(i)%filters) /= total_instances) then
+                    deallocate(job%sidechain_libs(i)%filters)
+                    allocate(job%sidechain_libs(i)%filters(total_instances))
+                    job%sidechain_libs(i)%filters(:) = .true.
+                end if
+
                 write(*,*)
                 write(*,*) '--- Detailed Individual Sidechain Configuration ---'
+                idx = 0
                 do k = 1, sc_lib%ncv
                     if (allocated(sc_lib%residue(k)%res_ids)) then
                         do n = 1, size(sc_lib%residue(k)%res_ids)
+                            idx = idx + 1
                             rid = sc_lib%residue(k)%res_ids(n)
                             cname = sc_lib%residue(k)%resname
+                            current_val = job%sidechain_libs(i)%filters(idx)
 
-                            write(*,'(A,I4,A,I6,A,A3,A)', advance='no') &
+                            write(*,'(A,I4,A,I6,A,A3,A,L1,A)', advance='no') &
                                 '  [Type ', k, ', Residue ID ', rid, '] Name: ', cname, &
-                                ' - Include? [y] (y/n): '
+                                ' - Include? [', current_val, '] (y/n): '
                             
                             read(*,'(A)') input
                             if (len_trim(input) > 0) then
                                 input = trim(adjustl(input))
                                 if (input == 'n' .or. input == 'N' .or. input == 'no') then
-                                    ! Falls detaillierte Instanzfilter im Job gewünscht sind:
-                                    ! job%sidechain_libs(i)%instance_filters(k, n) = .false.
+                                    job%sidechain_libs(i)%filters(idx) = .false.
+                                else if (input == 'y' .or. input == 'Y' .or. input == 'yes') then
+                                    job%sidechain_libs(i)%filters(idx) = .true.
                                 end if
                             end if
                         end do
                     end if
                 end do
-            end select
+                end select
 
             call clear_sidechain_library(sc_lib)
         end do
@@ -332,16 +407,21 @@ subroutine edit_cv_plan_workflow(job)
     if (job%include_domain_cvs .and. allocated(job%domain_libs)) then
         do i = 1, size(job%domain_libs)
             filename = job%domain_libs(i)%filename
-
-            call read_domain_library(trim(filename),dom_lib)
-            if (ios /= 0) then
+call init_domain_maps(topologies%state(job%istate), dom_lib)
+call read_domain_library(trim(filename), dom_lib)
+            if (dom_lib%ndo <= 0) then
                 write(*,*) 'Warning: Could not read domain library file "', trim(filename), '". Skipping filter.'
                 cycle
             end if
 
-            if (allocated(job%domain_libs(i)%filters)) deallocate(job%domain_libs(i)%filters)
-            allocate(job%domain_libs(i)%filters(dom_lib%ndo))
-            job%domain_libs(i)%filters(:) = .true.
+ if (.not. allocated(job%domain_libs(i)%filters)) then
+                allocate(job%domain_libs(i)%filters(dom_lib%ndo))
+                job%domain_libs(i)%filters(:) = .true.
+            else if (size(job%domain_libs(i)%filters) /= dom_lib%ndo) then
+                deallocate(job%domain_libs(i)%filters)
+                allocate(job%domain_libs(i)%filters(dom_lib%ndo))
+                job%domain_libs(i)%filters(:) = .true.
+            end if
 
             write(*,*)
             write(*,'(A,I0,A,A,A)') '--- Domain CV Filters for Library #', i, ' (', trim(filename), ') ---'
@@ -353,20 +433,24 @@ subroutine edit_cv_plan_workflow(job)
             if (input /= 'y' .and. input /= 'Y' .and. input /= 'yes') then
                 job%domain_libs(i)%selection_mode = 2
                 do k = 1, dom_lib%ndo
-                    write(*,'(A,I4,A,A,A)', advance='no') &
+                    current_val = job%domain_libs(i)%filters(k)
+                    write(*,'(A,I4,A,A,A,L1,A)', advance='no') &
                         '   [', k, '] Domain: ', trim(dom_lib%domain(k)%domain_name), &
-                        ' - Include in workflow? [y] (y/n): '
+                        ' - Include in workflow? [', current_val, '] (y/n): '
                     
                     read(*,'(A)') input
                     if (len_trim(input) > 0) then
                         input = trim(adjustl(input))
                         if (input == 'n' .or. input == 'N' .or. input == 'no') then
                             job%domain_libs(i)%filters(k) = .false.
+                        else if (input == 'y' .or. input == 'Y' .or. input == 'yes') then
+                            job%domain_libs(i)%filters(k) = .true.
                         end if
                     end if
                 end do
             else
                 job%domain_libs(i)%selection_mode = 1
+                job%domain_libs(i)%filters(:) = .true.
                 write(*,*) '-> All domains included by default.'
             end if
 
@@ -386,39 +470,45 @@ subroutine edit_cv_plan_workflow(job)
     if (job%include_user_cvs .and. allocated(job%user_libs)) then
         do i = 1, size(job%user_libs)
             filename = job%user_libs(i)%filename
-
-            call read_user_cv_library( trim(filename),user_lib)
-            if (ios /= 0) then
+            call read_user_cv_library(trim(filename), user_lib)
+            if (user_lib%n_cvs <= 0) then
                 write(*,*) 'Warning: Could not read user library file "', trim(filename), '". Skipping filter.'
                 cycle
             end if
 
-            if (user_lib%n_cvs > 0) then
-                if (allocated(job%user_libs(i)%filters)) deallocate(job%user_libs(i)%filters)
+        if (.not. allocated(job%user_libs(i)%filters)) then
                 allocate(job%user_libs(i)%filters(user_lib%n_cvs))
                 job%user_libs(i)%filters(:) = .true.
-
-                write(*,*)
-                write(*,'(A,I0,A,A,A)') '--- User-Defined CV Filters for Library #', i, ' (', trim(filename), ') ---'
-                do k = 1, user_lib%n_cvs
-                    write(*,'(A,I4,A,A,A)', advance='no') &
-                        '   [', k, '] CV Name: ', trim(user_lib%cvs(k)%cv_name), &
-                        ' - Include in workflow? [y] (y/n): '
-                    
-                    read(*,'(A)') input
-                    if (len_trim(input) > 0) then
-                        input = trim(adjustl(input))
-                        if (input == 'n' .or. input == 'N' .or. input == 'no') then
-                            job%user_libs(i)%filters(k) = .false.
-                        end if
-                    end if
-                end do
+            else if (size(job%user_libs(i)%filters) /= user_lib%n_cvs) then
+                deallocate(job%user_libs(i)%filters)
+                allocate(job%user_libs(i)%filters(user_lib%n_cvs))
+                job%user_libs(i)%filters(:) = .true.
             end if
+
+            write(*,*)
+            write(*,'(A,I0,A,A,A)') '--- User-Defined CV Filters for Library #', i, ' (', trim(filename), ') ---'
+            do k = 1, user_lib%n_cvs
+                current_val = job%user_libs(i)%filters(k)
+                write(*,'(A,I4,A,A,A,L1,A)', advance='no') &
+                    '   [', k, '] CV Name: ', trim(user_lib%cvs(k)%cv_name), &
+                    ' - Include in workflow? [', current_val, '] (y/n): '
+                
+                read(*,'(A)') input
+                if (len_trim(input) > 0) then
+                    input = trim(adjustl(input))
+                    if (input == 'n' .or. input == 'N' .or. input == 'no') then
+                        job%user_libs(i)%filters(k) = .false.
+                    else if (input == 'y' .or. input == 'Y' .or. input == 'yes') then
+                        job%user_libs(i)%filters(k) = .true.
+                    end if
+                end if
+            end do
 
             call clear_user_cv_library(user_lib)
         end do
     end if
-
+   
+    999 continue
     ! --------------------------------------------------
     ! Validate and Save Configuration
     ! --------------------------------------------------
@@ -436,16 +526,43 @@ subroutine edit_cv_plan_workflow(job)
     save_config = (trim(input) == 'y' .or. trim(input) == 'Y' .or. trim(input) == 'yes')
 
     if (save_config) then
-        write(*,'(A,A,A)', advance='no') 'Configuration filename [cv_plan_workflow.cfg]: '
+        write(*,'(A)', advance='no') 'Workflow file prefix (blank for no prefix): '
         read(*,'(A)') filename
 
-        if (len_trim(filename) == 0) filename = 'cv_plan_workflow.cfg'
+        filename = workflow_config_filename(trim(filename), cv_plan_workflow_config_stem)
 
         call write_cv_plan_workflow(job, trim(filename))
         write(*,'(3A)') 'Configuration saved to "', trim(filename), '"'
     end if
 
 end subroutine edit_cv_plan_workflow
+
+subroutine prompt_library_finalization(filename, library_type)
+    character(len=*), intent(inout) :: filename
+    character(len=*), intent(in) :: library_type
+    character(len=32) :: input
+    logical :: finalized
+
+    finalized = .not. is_preedited_library_filename(filename)
+    if (finalized) then
+        write(*,'(A,A,A)', advance='no') 'Is the ', trim(library_type), ' library finalized? [y]: '
+    else
+        write(*,'(A,A,A)', advance='no') 'Is the ', trim(library_type), ' library finalized? [n]: '
+    end if
+    read(*,'(A)') input
+
+    select case (trim(adjustl(input)))
+    case ('', 'y', 'Y', 'yes', 'YES', 'Yes')
+        if (len_trim(input) > 0) finalized = .true.
+    case ('n', 'N', 'no', 'NO', 'No')
+        finalized = .false.
+    case default
+        error stop 'Invalid finalization answer; enter y or n'
+    end select
+
+    filename = library_filename_for_finalization(filename, finalized)
+    write(*,'(A,A)') '-> CV plan will use library file: ', trim(filename)
+end subroutine prompt_library_finalization
 
 
 subroutine init_cv_plan_workflow(job, mode, filename)
@@ -515,7 +632,7 @@ end subroutine print_cv_plan_workflow
 subroutine write_cv_plan_workflow_unit(job, unit)
     type(cv_plan_workflow_type), intent(in) :: job
     integer, intent(in) :: unit
-    integer :: i
+    integer :: i, j
 
     write(unit, '(A)') '# CV plan workflow configuration'
     write(unit, '(A)') 'workflow_type = cv_plan'
@@ -523,6 +640,21 @@ subroutine write_cv_plan_workflow_unit(job, unit)
     write(unit, '(A)') ''
 
     write(unit, '(A)') '# Run parameters'
+    
+    
+ 
+    call write_bool(unit, 'read_existing_cv_plan', job%read_existing_cv_plan)
+    write(unit, '(A,A)') 'existing_cv_plan_filename = ', trim(job%existing_cv_plan_filename)
+    
+    if(job%read_existing_cv_plan) then
+    	return
+    end if
+    
+    write(unit, '(A,I0)') 'istate = ', job%istate
+    
+    write(unit, '(A,A)') 'cv_plan_filename = ', trim(job%cv_plan_filename)
+    
+    
     call write_bool(unit, 'include_sidechain_cvs', job%include_sidechain_cvs)
     call write_bool(unit, 'include_domain_cvs', job%include_domain_cvs)
     call write_bool(unit, 'include_user_cvs', job%include_user_cvs)
@@ -530,37 +662,57 @@ subroutine write_cv_plan_workflow_unit(job, unit)
     write(unit, '(A)') ''
     write(unit, '(A)') '# Library configurations'
     
-    ! Sidechain Bibliotheken und Modi schreiben
+    ! Sidechain Bibliotheken, Modi und Filter schreiben
     if (allocated(job%sidechain_libs)) then
         write(unit, '(A,I0)') 'n_sidechain_libs = ', size(job%sidechain_libs)
         do i = 1, size(job%sidechain_libs)
             write(unit, '(A,I0,A,A)') 'sidechain_library_file_', i, ' = ', trim(job%sidechain_libs(i)%filename)
             write(unit, '(A,I0,A,I0)') 'sidechain_selection_mode_', i, ' = ', job%sidechain_libs(i)%selection_mode
+            
+            if (allocated(job%sidechain_libs(i)%filters)) then
+                write(unit, '(A,I0,A,I0)') 'n_sidechain_filters_', i, ' = ', size(job%sidechain_libs(i)%filters)
+                do j = 1, size(job%sidechain_libs(i)%filters)
+                    write(unit, '(A,I0,A,I0,A,L1)') 'sidechain_filter_', i, '_', j, ' = ', job%sidechain_libs(i)%filters(j)
+                end do
+            end if
         end do
     end if
 
     write(unit, '(A)') ''
-    ! Domain Bibliotheken und Modi schreiben
+    ! Domain Bibliotheken, Modi und Filter schreiben
     if (allocated(job%domain_libs)) then
         write(unit, '(A,I0)') 'n_domain_libs = ', size(job%domain_libs)
         do i = 1, size(job%domain_libs)
             write(unit, '(A,I0,A,A)') 'domain_library_file_', i, ' = ', trim(job%domain_libs(i)%filename)
             write(unit, '(A,I0,A,I0)') 'domain_selection_mode_', i, ' = ', job%domain_libs(i)%selection_mode
+            
+            if (allocated(job%domain_libs(i)%filters)) then
+                write(unit, '(A,I0,A,I0)') 'n_domain_filters_', i, ' = ', size(job%domain_libs(i)%filters)
+                do j = 1, size(job%domain_libs(i)%filters)
+                    write(unit, '(A,I0,A,I0,A,L1)') 'domain_filter_', i, '_', j, ' = ', job%domain_libs(i)%filters(j)
+                end do
+            end if
         end do
     end if
 
     write(unit, '(A)') ''
-    ! User Bibliotheken und Modi schreiben
+    ! User Bibliotheken, Modi und Filter schreiben
     if (allocated(job%user_libs)) then
         write(unit, '(A,I0)') 'n_user_cv_libs = ', size(job%user_libs)
         do i = 1, size(job%user_libs)
             write(unit, '(A,I0,A,A)') 'user_library_file_', i, ' = ', trim(job%user_libs(i)%filename)
             write(unit, '(A,I0,A,I0)') 'user_selection_mode_', i, ' = ', job%user_libs(i)%selection_mode
+            
+            if (allocated(job%user_libs(i)%filters)) then
+                write(unit, '(A,I0,A,I0)') 'n_user_filters_', i, ' = ', size(job%user_libs(i)%filters)
+                do j = 1, size(job%user_libs(i)%filters)
+                    write(unit, '(A,I0,A,I0,A,L1)') 'user_filter_', i, '_', j, ' = ', job%user_libs(i)%filters(j)
+                end do
+            end if
         end do
     end if
 
 end subroutine write_cv_plan_workflow_unit
-
 
 subroutine write_bool(unit, key, value)
     integer, intent(in) :: unit
@@ -582,8 +734,9 @@ subroutine read_cv_plan_workflow(job, filename)
     character(len=128)  :: key
     character(len=1900) :: value
 
-    integer :: unit, ios, line_number, eq_pos, format_version, idx, n_libs
+    integer :: unit, ios, line_number, eq_pos, format_version, idx, lib_idx, filter_idx, n_libs, n_filters
     logical :: seen_type, seen_version
+    logical :: bool_val
 
     job = cv_plan_workflow_type()
     format_version = -1
@@ -628,7 +781,20 @@ subroutine read_cv_plan_workflow(job, filename)
             call check_value_read(ios, line_number, key)
             if (format_version /= 1) call config_error(line_number, 'Unsupported format_version')
             seen_version = .true.
+       
+     case ('cv_plan_filename')
+            job%cv_plan_filename = trim(value)
+            
+        case ('read_existing_cv_plan')
+            read(value, *, iostat=ios) job%read_existing_cv_plan
+            call check_value_read(ios, line_number, key)
 
+        case ('existing_cv_plan_filename')
+            job%existing_cv_plan_filename = trim(value)
+        case ('istate')
+            read(value, *, iostat=ios) job%istate
+            call check_value_read(ios, line_number, key)
+            
         case ('include_sidechain_cvs')
             read(value, *, iostat=ios) job%include_sidechain_cvs
             call check_value_read(ios, line_number, key)
@@ -645,19 +811,19 @@ subroutine read_cv_plan_workflow(job, filename)
             read(value, *, iostat=ios) n_libs
             call check_value_read(ios, line_number, key)
             if (allocated(job%sidechain_libs)) deallocate(job%sidechain_libs)
-            if (n_libs >  0) allocate(job%sidechain_libs(n_libs))
+            if (n_libs > 0) allocate(job%sidechain_libs(n_libs))
 
         case ('n_domain_libs')
             read(value, *, iostat=ios) n_libs
             call check_value_read(ios, line_number, key)
             if (allocated(job%domain_libs)) deallocate(job%domain_libs)
-            if (n_libs >  0) allocate(job%domain_libs(n_libs))
+            if (n_libs > 0) allocate(job%domain_libs(n_libs))
 
         case ('n_user_cv_libs')
             read(value, *, iostat=ios) n_libs
             call check_value_read(ios, line_number, key)
             if (allocated(job%user_libs)) deallocate(job%user_libs)
-            if (n_libs >  0) allocate(job%user_libs(n_libs))
+            if (n_libs > 0) allocate(job%user_libs(n_libs))
 
         case default
             if (index(trim(key), 'sidechain_library_file_') == 1) then
@@ -673,6 +839,44 @@ subroutine read_cv_plan_workflow(job, filename)
                         call check_value_read(ios, line_number, key)
                     end if
                 end if
+            else if (index(trim(key), 'n_sidechain_filters_') == 1) then
+                read(key(21:), *, iostat=ios) idx
+                if (ios == 0 .and. idx > 0 .and. allocated(job%sidechain_libs)) then
+                    read(value, *, iostat=ios) n_filters
+                    if (idx <= size(job%sidechain_libs)) then
+                        if (allocated(job%sidechain_libs(idx)%filters)) deallocate(job%sidechain_libs(idx)%filters)
+                        if (n_filters > 0) allocate(job%sidechain_libs(idx)%filters(n_filters))
+                    end if
+                end if
+else if (index(trim(key), 'sidechain_filter_') == 1) then
+                ! Suffix hat die Form <Bibliotheksindex>_<Filterindex>.
+                ! Erst am Unterstrich trennen; "1_2" darf nicht als Zahl gelesen werden.
+                eq_pos = index(key(18:), '_')
+                if (eq_pos > 1) then
+                    read(key(18:16+eq_pos), *, iostat=ios) lib_idx
+                    if (ios == 0) read(key(18+eq_pos:), *, iostat=ios) filter_idx
+
+                    if (ios == 0 .and. lib_idx > 0 .and. filter_idx > 0 .and. allocated(job%sidechain_libs)) then
+                        if (lib_idx <= size(job%sidechain_libs)) then
+                            if (allocated(job%sidechain_libs(lib_idx)%filters)) then
+                                if (filter_idx <= size(job%sidechain_libs(lib_idx)%filters)) then
+                                    
+                                    ! Robuster String-Vergleich
+                                    value = trim(adjustl(value))
+                                    if (value == 'T' .or. value == 't' .or. value == '.true.' .or. value == '.TRUE.' .or. value == '1') then
+                                        job%sidechain_libs(lib_idx)%filters(filter_idx) = .true.
+                                    else if (value == 'F' .or. value == 'f' .or. value == '.false.' .or. value == '.FALSE.' .or. value == '0') then
+                                        job%sidechain_libs(lib_idx)%filters(filter_idx) = .false.
+                                    else
+                                        call config_error(line_number, 'Invalid boolean value for sidechain filter: '//trim(value))
+                                    end if
+                                    
+                                end if
+                            end if
+                        end if
+                    end if
+                end if
+
             else if (index(trim(key), 'domain_library_file_') == 1) then
                 read(key(21:), *, iostat=ios) idx
                 if (ios == 0 .and. idx > 0 .and. allocated(job%domain_libs)) then
@@ -686,6 +890,40 @@ subroutine read_cv_plan_workflow(job, filename)
                         call check_value_read(ios, line_number, key)
                     end if
                 end if
+            else if (index(trim(key), 'n_domain_filters_') == 1) then
+                read(key(18:), *, iostat=ios) idx
+                if (ios == 0 .and. idx > 0 .and. allocated(job%domain_libs)) then
+                    read(value, *, iostat=ios) n_filters
+                    if (idx <= size(job%domain_libs)) then
+                        if (allocated(job%domain_libs(idx)%filters)) deallocate(job%domain_libs(idx)%filters)
+                        if (n_filters > 0) allocate(job%domain_libs(idx)%filters(n_filters))
+                    end if
+                end if
+         else if (index(trim(key), 'domain_filter_') == 1) then
+                ! Suffix hat die Form <Bibliotheksindex>_<Filterindex>.
+                eq_pos = index(key(15:), '_')
+                if (eq_pos > 1) then
+                    read(key(15:13+eq_pos), *, iostat=ios) lib_idx
+                    if (ios == 0) read(key(15+eq_pos:), *, iostat=ios) filter_idx
+
+                    if (ios == 0 .and. lib_idx > 0 .and. filter_idx > 0 .and. allocated(job%domain_libs)) then
+                        if (lib_idx <= size(job%domain_libs)) then
+                            if (allocated(job%domain_libs(lib_idx)%filters)) then
+                                if (filter_idx <= size(job%domain_libs(lib_idx)%filters)) then
+                                    value = trim(adjustl(value))
+                                    if (value == 'T' .or. value == 't' .or. value == '.true.' .or. value == '.TRUE.' .or. value == '1') then
+                                        job%domain_libs(lib_idx)%filters(filter_idx) = .true.
+                                    else if (value == 'F' .or. value == 'f' .or. value == '.false.' .or. value == '.FALSE.' .or. value == '0') then
+                                        job%domain_libs(lib_idx)%filters(filter_idx) = .false.
+                                    else
+                                        call config_error(line_number, 'Invalid boolean value for domain filter: '//trim(value))
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end if
+                end if
+
             else if (index(trim(key), 'user_library_file_') == 1) then
                 read(key(19:), *, iostat=ios) idx
                 if (ios == 0 .and. idx > 0 .and. allocated(job%user_libs)) then
@@ -699,6 +937,39 @@ subroutine read_cv_plan_workflow(job, filename)
                         call check_value_read(ios, line_number, key)
                     end if
                 end if
+            else if (index(trim(key), 'n_user_filters_') == 1) then
+                read(key(16:), *, iostat=ios) idx
+                if (ios == 0 .and. idx > 0 .and. allocated(job%user_libs)) then
+                    read(value, *, iostat=ios) n_filters
+                    if (idx <= size(job%user_libs)) then
+                        if (allocated(job%user_libs(idx)%filters)) deallocate(job%user_libs(idx)%filters)
+                        if (n_filters > 0) allocate(job%user_libs(idx)%filters(n_filters))
+                    end if
+                end if
+            else if (index(trim(key), 'user_filter_') == 1) then
+                ! Suffix hat die Form <Bibliotheksindex>_<Filterindex>.
+                eq_pos = index(key(13:), '_')
+                if (eq_pos > 1) then
+                    read(key(13:11+eq_pos), *, iostat=ios) lib_idx
+                    if (ios == 0) read(key(13+eq_pos:), *, iostat=ios) filter_idx
+                    if (ios == 0 .and. lib_idx > 0 .and. filter_idx > 0 .and. allocated(job%user_libs)) then
+                        if (lib_idx <= size(job%user_libs)) then
+                            if (allocated(job%user_libs(lib_idx)%filters)) then
+                                if (filter_idx <= size(job%user_libs(lib_idx)%filters)) then
+                                    value = trim(adjustl(value))
+                                    if (value == 'T' .or. value == 't' .or. value == '.true.' .or. value == '.TRUE.' .or. value == '1') then
+                                        job%user_libs(lib_idx)%filters(filter_idx) = .true.
+                                    else if (value == 'F' .or. value == 'f' .or. value == '.false.' .or. value == '.FALSE.' .or. value == '0') then
+                                        job%user_libs(lib_idx)%filters(filter_idx) = .false.
+                                    else
+                                        call config_error(line_number, 'Invalid boolean value for user filter: '//trim(value))
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end if
+                end if
+
             else
                 call config_error(line_number, 'Unknown parameter: '//trim(key))
             end if
