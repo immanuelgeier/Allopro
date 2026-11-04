@@ -4,7 +4,9 @@ module random_seed_workflow_module
     use random_seed_io_module, only: &
         random_seed_config_type, &
         configure_seed, &
-        initialize_random_seed
+        initialize_random_seed, &
+        initialize_random_seed_from_state, &
+        save_random_seed_state
 
     implicit none
     private
@@ -14,6 +16,10 @@ module random_seed_workflow_module
     public :: read_seed_workflow
     public :: write_seed_workflow
     public :: run_seed_workflow
+    public :: begin_seed_workflow_execution
+    public :: checkpoint_seed_workflow_state
+
+    character(len=1024), save :: active_state_file = ''
 
     type :: random_seed_workflow_type
         logical :: initialized = .false.
@@ -163,14 +169,18 @@ end subroutine configure_seed_workflow
         logical :: use_saved_seed
         logical :: save_seed
         character(len=1024) :: seed_file
+        logical :: resume_state
+        character(len=1024) :: state_file
 
         namelist /seed_workflow/ &
-            initialized, use_saved_seed, save_seed, seed_file
+            initialized, use_saved_seed, save_seed, seed_file, resume_state, state_file
 
         initialized    = workflow%initialized
         use_saved_seed = workflow%config%use_saved_seed
         save_seed      = workflow%config%save_seed
         seed_file      = workflow%config%seed_file
+        resume_state   = workflow%config%resume_state
+        state_file     = workflow%config%state_file
 
         open( &
             newunit=u, &
@@ -223,9 +233,11 @@ end subroutine configure_seed_workflow
         logical :: use_saved_seed
         logical :: save_seed
         character(len=1024) :: seed_file
+        logical :: resume_state
+        character(len=1024) :: state_file
 
         namelist /seed_workflow/ &
-            initialized, use_saved_seed, save_seed, seed_file
+            initialized, use_saved_seed, save_seed, seed_file, resume_state, state_file
 
         workflow = random_seed_workflow_type()
 
@@ -233,6 +245,8 @@ end subroutine configure_seed_workflow
         use_saved_seed = .false.
         save_seed      = .true.
         seed_file      = 'random_seed.dat'
+        resume_state   = .false.
+        state_file     = 'random_state.dat'
 
         open( &
             newunit=u, &
@@ -265,6 +279,8 @@ end subroutine configure_seed_workflow
         workflow%config%use_saved_seed = use_saved_seed
         workflow%config%save_seed      = save_seed
         workflow%config%seed_file      = trim(seed_file)
+        workflow%config%resume_state   = resume_state
+        workflow%config%state_file     = trim(state_file)
 
     end subroutine read_seed_workflow
 
@@ -284,9 +300,24 @@ end subroutine configure_seed_workflow
             return
         end if
 
-        call initialize_random_seed(workflow%config)
+        if (workflow%config%resume_state) then
+            call initialize_random_seed_from_state(workflow%config, workflow%config%state_file)
+            active_state_file = workflow%config%state_file
+        else
+            call initialize_random_seed(workflow%config)
+            active_state_file = ''
+        end if
 
     end subroutine run_seed_workflow
+
+    subroutine begin_seed_workflow_execution()
+        active_state_file = ''
+    end subroutine begin_seed_workflow_execution
+
+    subroutine checkpoint_seed_workflow_state()
+        if (len_trim(active_state_file) == 0) return
+        call save_random_seed_state(trim(active_state_file))
+    end subroutine checkpoint_seed_workflow_state
 subroutine edit_seed_workflow(job)
 
     implicit none
@@ -302,7 +333,8 @@ subroutine edit_seed_workflow(job)
     write(*,*) '======================================'
     write(*,*)
     write(*,*) '1 = Generate a new seed'
-    write(*,*) '2 = Load a saved seed'
+    write(*,*) '2 = Replay a saved seed from the beginning'
+    write(*,*) '3 = Resume a saved generator state'
     write(*,*)
     write(*,'(A)', advance='no') 'Select option: '
 
@@ -315,9 +347,15 @@ subroutine edit_seed_workflow(job)
 
     case (1)
         job%config%use_saved_seed = .false.
+        job%config%resume_state = .false.
 
     case (2)
         job%config%use_saved_seed = .true.
+        job%config%resume_state = .false.
+
+    case (3)
+        job%config%use_saved_seed = .true.
+        job%config%resume_state = .true.
 
     case default
         error stop 'Invalid seed option'
@@ -353,6 +391,16 @@ subroutine edit_seed_workflow(job)
             job%config%seed_file = trim(input)
         else if (len_trim(job%config%seed_file) == 0) then
             job%config%seed_file = 'random_seed.dat'
+        end if
+
+        if (job%config%resume_state) then
+            write(*,'(A)', advance='no') 'Generator state filename [random_state.dat]: '
+            read(*,'(A)') input
+            if (len_trim(input) > 0) then
+                job%config%state_file = trim(input)
+            else if (len_trim(job%config%state_file) == 0) then
+                job%config%state_file = 'random_state.dat'
+            end if
         end if
 
     end if
@@ -392,6 +440,9 @@ subroutine print_seed_workflow(job)
         write(*,'(A,A)') &
             'Seed filename:     ', trim(job%config%seed_file)
     end if
+    if (job%config%resume_state) then
+        write(*,'(A,A)') 'Generator state:   ', trim(job%config%state_file)
+    end if
 
     write(*,*) '--------------------------------------'
 
@@ -411,6 +462,10 @@ subroutine validate_seed_workflow(job)
             error stop 'Seed filename must not be empty'
         end if
 
+    end if
+
+    if (job%config%resume_state .and. len_trim(job%config%state_file) == 0) then
+        error stop 'Generator state filename must not be empty'
     end if
 
 end subroutine validate_seed_workflow

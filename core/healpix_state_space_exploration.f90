@@ -114,7 +114,7 @@ subroutine read_odf_lib(odf_lib,prefix_odf,path_odf)
     integer :: npix_file
     integer :: nobj_file
 
-    character(len=256) :: filename
+    character(len=4096) :: filename
     character(len=256) :: line
 
     character(len=32) :: dummy1
@@ -334,22 +334,38 @@ end subroutine read_odf_lib
 
 
 
-subroutine write_odf_analysis_text(odf_lib)
+subroutine write_odf_analysis_text(odf_lib, output_filename)
     implicit none
 
     type(odf_lib_type), intent(in) :: odf_lib
+    character(len=*), intent(in), optional :: output_filename
 
     integer :: iodf, iobj, ilevel, i
     integer :: unit, nobj
-    character(len=256) :: filename
+    integer :: ios
+    character(len=4096) :: filename
+    logical :: single_file
+
+    single_file = present(output_filename)
+    if (single_file) then
+        open(newunit=unit, file=trim(output_filename), status="replace", action="write", iostat=ios)
+        if (ios /= 0) then
+            write(0,'(A,A)') 'ERROR: could not write ODF analysis file: ', trim(output_filename)
+            error stop 'ODF analysis output failed'
+        end if
+    end if
 
     do iodf = 1, odf_lib%n_odf
         if (.not. allocated(odf_lib%odf(iodf)%analysis)) cycle
 
-        ! Dateiname z. B. "state_0001_lag_000_analysis.txt"
-        filename = trim(odf_lib%odf(iodf)%odf_name) // "_analysis.txt"
-
-        open(newunit=unit, file=trim(filename), status="replace", action="write")
+        if (.not. single_file) then
+            filename = trim(odf_lib%odf(iodf)%odf_name) // "_analysis.txt"
+            open(newunit=unit, file=trim(filename), status="replace", action="write", iostat=ios)
+            if (ios /= 0) then
+                write(0,'(A,A)') 'ERROR: could not write ODF analysis file: ', trim(filename)
+                error stop 'ODF analysis output failed'
+            end if
+        end if
 
         nobj = size(odf_lib%odf(iodf)%analysis, 1)
 
@@ -402,9 +418,13 @@ subroutine write_odf_analysis_text(odf_lib)
             end do
         end do
 
-        close(unit)
+        if (.not. single_file) close(unit)
     end do
 
+    if (single_file) then
+        close(unit, iostat=ios)
+        if (ios /= 0) error stop 'Error closing ODF analysis output'
+    end if
 end subroutine write_odf_analysis_text
 
 subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel, nobj)
@@ -724,17 +744,26 @@ subroutine write_odf_lib( &
 
 end subroutine write_odf_lib
 
-subroutine write_entropy(odf_lib)
+subroutine write_entropy(odf_lib, output_filename)
 
 implicit none
 
 type(odf_lib_type),intent(in)::odf_lib
+character(len=*),intent(in),optional::output_filename
 
 integer :: unit
 integer :: iobj,ilag,ilevel
+integer :: ios
+character(len=4096) :: filename
 
 
-open(newunit=unit,file="odf_entropy.txt",status="replace")
+filename = "odf_entropy.txt"
+if (present(output_filename)) filename = trim(output_filename)
+open(newunit=unit,file=trim(filename),status="replace",action="write",iostat=ios)
+if (ios /= 0) then
+    write(0,'(A,A)') 'ERROR: could not write ODF entropy file: ', trim(filename)
+    error stop 'ODF entropy output failed'
+end if
 
 
 write(unit,*) "# object lag level entropy"
@@ -757,7 +786,8 @@ enddo
 enddo
 
 
-close(unit)
+close(unit,iostat=ios)
+if (ios /= 0) error stop 'Error closing ODF entropy output'
 
 
 end subroutine write_entropy
@@ -876,9 +906,9 @@ subroutine sample_odfs( &
 
                             lsq = norm2(vec)
 
-                            if (lsq == 0.0_8) cycle
+                           ! if (lsq == 0.0_8) cycle
 
-                            length = min(sqrt(lsq),length)
+                           ! length = min(sqrt(lsq),length)
 
                             vec = vec / sqrt(lsq)
 
@@ -898,21 +928,7 @@ subroutine sample_odfs( &
                                 odf_lib%odf(iodf)%hist(ipix+1,iobj) + 1
 
 
-                            ! C2-Symmetrie bei Bedarf:
-                            !
-                            ! if (odf_lib%c2_symmetry(iobj)) then
-                            !
-                            !     vec_local = -vec_local
-                            !
-                            !     call vec2pix_nest( &
-                            !         odf_lib%odf(iodf)%nside, &
-                            !         vec_local, &
-                            !         ipix)
-                            !
-                            !     odf_lib%odf(iodf)%hist(ipix+1,iobj) = &
-                            !         odf_lib%odf(iodf)%hist(ipix+1,iobj) + 1
-                            !
-                            ! end if
+             
 
                         end do
                     end do
@@ -920,7 +936,7 @@ subroutine sample_odfs( &
                 end do
 
 
-                write(0,*) 'max length', length
+                !write(0,*) 'max length', length
 
                 deallocate(rots)
 

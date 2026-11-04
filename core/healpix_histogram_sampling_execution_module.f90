@@ -26,7 +26,7 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
 ,nlevel_target,max_chunk_size,tau_mem,dt&
 ,max_ram_gb&
 ,block_shuffle,nrun_shuffle,block_size_shuffle&
-,only_lifting,prefix_odf,path_odf,pair_active)
+,only_lifting,prefix_odf,path_odf,pair_active,load_block_permutations,block_permutation_filename)
 
     use output_policy_module, only: get_output_prefix, check_output_policy, &
         OUTPUT_ABORT
@@ -56,6 +56,8 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
     character(len=2048) :: path_and_prefix_vec_tra,path_and_prefix_tra,path_and_prefix_hist
     character(len=2048) :: effective_hist_prefix, histogram_file
     logical, intent(in) :: pair_active(:,:)
+    logical, intent(in), optional :: load_block_permutations
+    character(len=*), intent(in), optional :: block_permutation_filename
     integer, allocatable :: output_actions(:)
     integer :: ichunk, ishuffle, output_action, output_index
     
@@ -132,7 +134,9 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
     call execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                                           npix, lag, block_size_shuffle, &
                                           nrun_shuffle, path_and_prefix_tra&
-                                          , path_and_prefix_hist, output_actions)
+                                          , path_and_prefix_hist, output_actions, &
+                                          load_permutations=load_block_permutations, &
+                                          permutation_filename=block_permutation_filename)
                                           
       ! call execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
       !                                    npix, lag, block_size_shuffle, &

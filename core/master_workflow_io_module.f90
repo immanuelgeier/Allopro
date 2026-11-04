@@ -8,7 +8,8 @@ module master_workflow_io_module
         centroid_distance_histogram_workflow_config_stem, odf_sampling_workflow_config_stem, &
         healpix_lifting_workflow_config_stem, histogram_sampling_workflow_config_stem, &
         sh_product_sampling_workflow_config_stem, sh_invariant_contraction_workflow_config_stem, &
-        te_plot_workflow_config_stem, active_pair_filter_workflow_config_stem
+        te_plot_workflow_config_stem, active_pair_filter_workflow_config_stem, &
+        odf_analysis_workflow_config_stem
     implicit none
     private
 
@@ -30,6 +31,7 @@ module master_workflow_io_module
     integer, parameter, public :: sh_invariant_contraction_workflow_step_type_id = 15
     integer, parameter, public :: te_plot_workflow_step_type_id = 16
     integer, parameter, public :: active_pair_filter_workflow_step_type_id = 17
+    integer, parameter, public :: odf_analysis_workflow_step_type_id = 18
 
     ! Typ für einen einzelnen Workflow-Schritt im Master-Log/Plan
     type :: workflow_step_type
@@ -55,7 +57,7 @@ subroutine configure_master_workflow(master)
     integer :: i, n_files, n_matching, selected_type, file_choice
     
     ! Only workflow types supported by the execution dispatch are offered.
-    integer, parameter :: n_known_types = 17
+    integer, parameter :: n_known_types = 18
     character(len=128), dimension(n_known_types), parameter :: known_step_types = [ character(len=128) :: &
         'seed                    ', &
         'traj_settings           ', &
@@ -73,7 +75,8 @@ subroutine configure_master_workflow(master)
         'SH product sampling     ', &
         'SH invariant contraction', &
         'TE matrix plotting       ', &
-        'Active CV-pair filter    ' &
+        'Active CV-pair filter    ', &
+        'ODF analysis             ' &
     ]
     character(len=40), dimension(n_known_types), parameter :: config_stems = [ character(len=40) :: &
         seed_workflow_config_stem, &
@@ -92,7 +95,8 @@ subroutine configure_master_workflow(master)
         sh_product_sampling_workflow_config_stem, &
         sh_invariant_contraction_workflow_config_stem, &
         te_plot_workflow_config_stem, &
-        active_pair_filter_workflow_config_stem &
+        active_pair_filter_workflow_config_stem, &
+        odf_analysis_workflow_config_stem &
     ]
 
     integer :: type_choice, step_count, ios, unit_tmp

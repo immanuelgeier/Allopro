@@ -107,6 +107,8 @@ subroutine edit_histogram_sampling_workflow(job)
     call edit_logical('Block shuffle enabled', job%model_params%block_shuffle)
     call edit_integer('Number of shuffled runs', job%model_params%nrun_shuffle)
     call edit_integer('Shuffle block size', job%model_params%block_size_shuffle)
+    call edit_logical('Load saved block permutations', job%model_params%load_block_permutations)
+    call edit_string('Block permutation filename', job%io_params%block_permutation_filename)
     call edit_integer('Backbone basis index for lifting', job%model_params%basis_index)
     call edit_string('Histogram output policy (ask/replace/new)', &
         job%io_params%histogram_output_policy)
@@ -185,6 +187,12 @@ subroutine validate_histogram_sampling_workflow(job)
     end if
     if (len_trim(job%io_params%histogram_path) == 0) error stop 'Histogram path cannot be empty'
     if (len_trim(job%io_params%histogram_prefix) == 0) error stop 'Histogram prefix cannot be empty'
+    if (len_trim(job%io_params%block_permutation_filename) == 0) then
+        error stop 'Block permutation filename cannot be empty'
+    end if
+    if (job%model_params%load_block_permutations .and. .not. job%model_params%block_shuffle) then
+        error stop 'Saved block permutations require block shuffle to be enabled'
+    end if
     select case (trim(job%io_params%histogram_output_policy))
     case ('ask', 'replace', 'new')
     case default
@@ -234,8 +242,36 @@ subroutine run_histogram_sampling_workflow(job)
         dt=job%model_params%dt, max_ram_gb=job%model_params%max_ram_gb, &
         block_shuffle=job%model_params%block_shuffle, nrun_shuffle=job%model_params%nrun_shuffle, &
         block_size_shuffle=job%model_params%block_size_shuffle, only_lifting=.false., &
-        prefix_odf=trim(job%io_params%odf_prefix), path_odf=trim(odf_path), pair_active=pair_active)
+        prefix_odf=trim(job%io_params%odf_prefix), path_odf=trim(odf_path), pair_active=pair_active, &
+        load_block_permutations=job%model_params%load_block_permutations, &
+        block_permutation_filename=resolve_block_permutation_filename(job))
 end subroutine run_histogram_sampling_workflow
+
+subroutine check_block_permutation_file(job)
+    type(histogram_sampling_workflow_type), intent(in) :: job
+    character(len=2048) :: filename
+    logical :: file_exists
+
+    filename = resolve_block_permutation_filename(job)
+    inquire(file=trim(filename), exist=file_exists)
+    if (.not. file_exists) then
+        write(error_unit,'(A,A)') 'Block permutation file not found: ', trim(filename)
+        error stop 'Histogram sampling permutation input failed'
+    end if
+end subroutine check_block_permutation_file
+
+function resolve_block_permutation_filename(job) result(filename)
+    type(histogram_sampling_workflow_type), intent(in) :: job
+    character(len=2048) :: filename
+    character(len=1024) :: directory
+
+    if (job%io_params%block_permutation_filename(1:1) == '/') then
+        filename = trim(job%io_params%block_permutation_filename)
+    else
+        directory = ensure_directory_separator(job%io_params%histogram_path)
+        filename = trim(directory)//trim(job%io_params%block_permutation_filename)
+    end if
+end function resolve_block_permutation_filename
 
 subroutine check_histogram_sampling_inputs(job, cv_plan_filename, lifting_plan_filename, &
     cv_plan_will_be_generated, lifting_plan_will_be_generated)
@@ -251,6 +287,7 @@ subroutine check_histogram_sampling_inputs(job, cv_plan_filename, lifting_plan_f
     logical :: file_exists, cv_generated, lifting_plan_generated
 
     call validate_histogram_sampling_workflow(job)
+    if (job%model_params%load_block_permutations) call check_block_permutation_file(job)
     cv_generated = .false.
     if (present(cv_plan_will_be_generated)) cv_generated = cv_plan_will_be_generated
     lifting_plan_generated = .false.
@@ -414,6 +451,8 @@ subroutine write_histogram_sampling_workflow(job, filename)
     write(unit,'(A,L1)') 'block_shuffle = ', job%model_params%block_shuffle
     write(unit,'(A,I0)') 'nrun_shuffle = ', job%model_params%nrun_shuffle
     write(unit,'(A,I0)') 'block_size_shuffle = ', job%model_params%block_size_shuffle
+    write(unit,'(A,L1)') 'load_block_permutations = ', job%model_params%load_block_permutations
+    write(unit,'(A,A)') 'block_permutation_filename = ', trim(job%io_params%block_permutation_filename)
     write(unit,'(A,A)') 'histogram_output_policy = ', trim(job%io_params%histogram_output_policy)
     close(unit, iostat=ios)
     if (ios /= 0) error stop 'Error closing histogram sampling workflow file'
@@ -516,6 +555,11 @@ subroutine read_histogram_sampling_workflow(filename, job)
         case ('block_size_shuffle')
             read(value,*,iostat=ios) job%model_params%block_size_shuffle
             if (ios /= 0) call config_read_error(unit, 'Invalid block_size_shuffle')
+        case ('load_block_permutations')
+            read(value,*,iostat=ios) job%model_params%load_block_permutations
+            if (ios /= 0) call config_read_error(unit, 'Invalid load_block_permutations')
+        case ('block_permutation_filename')
+            job%io_params%block_permutation_filename = trim(value)
         case ('histogram_output_policy')
             job%io_params%histogram_output_policy = trim(value)
         case default
@@ -551,6 +595,9 @@ subroutine print_histogram_sampling_workflow(job)
     write(output_unit,'(A,L1)') 'Block shuffle: ', job%model_params%block_shuffle
     write(output_unit,'(A,I0)') 'Shuffle runs: ', job%model_params%nrun_shuffle
     write(output_unit,'(A,I0)') 'Shuffle block size: ', job%model_params%block_size_shuffle
+    write(output_unit,'(A,L1)') 'Load saved block permutations: ', &
+        job%model_params%load_block_permutations
+    write(output_unit,'(A,A)') 'Block permutation file: ', trim(job%io_params%block_permutation_filename)
     write(output_unit,'(A,A)') 'Histogram output policy: ', trim(job%io_params%histogram_output_policy)
 end subroutine print_histogram_sampling_workflow
 

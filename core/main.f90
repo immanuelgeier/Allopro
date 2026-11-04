@@ -44,6 +44,7 @@ use sh_product_sampling_workflow_module
 use sh_invariant_contraction_workflow_module
 use te_plot_workflow_module
 use active_pair_filter_workflow_module
+use odf_analysis_workflow_module
 use sh_product_rotation_invariance_test_module
 
 implicit none
@@ -77,6 +78,7 @@ type(sh_product_sampling_workflow_type) :: sh_product_sampling_workflow
 type(sh_invariant_contraction_workflow_type) :: sh_invariant_contraction_workflow
 type(te_plot_workflow_type) :: te_plot_workflow
 type(active_pair_filter_workflow_type) :: active_pair_filter_workflow
+type(odf_analysis_workflow_type) :: odf_analysis_workflow
 !integer :: irep,istate
 
 logical :: found
@@ -86,104 +88,11 @@ logical, allocatable :: matrix_active_final(:,:)
 type(random_seed_workflow_type) ::seed_job, initial_seed_workflow,prodcution_seed_workflow
 logical :: run
 
-!call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
-!stop
+
 call run_workflow_driver()
-!call configure_cv_plan_workflow(cv_plan_workflow1)
-
-stop
-!call configure_sub_workflows()
-	
-
-
-run=.false.
-run=.true.
-
-write(0,*)
-write(0,*) 'INITIAL SEED WORKFLOW CONFIGURATION'
-
-call configure_seed_workflow(initial_seed_workflow)
-if(run) then
-call run_seed_workflow(initial_seed_workflow)
-end if
-
-write(0,*)
-write(0,*) 'PRODUCTION SEED WORKFLOW CONFIGURATION'
-
-call configure_seed_workflow(prodcution_seed_workflow)
-if(run) then
-call run_seed_workflow(prodcution_seed_workflow)
-end if
-
-
-call initialize_system(project,topologies)
-
-call configure_trajectory_workflow(traj_workflow,project,topologies)
-
-!call initialize_trajectory_settings(project, topologies)
-
-stop
-if(1==1) then
-call analyze_project_frames(project)
-call print_project_summary(project)
-end if
 
 
 
-call init_resnames_and_sidechain_head_groups(sc_lib)
-call init_sidechain_head(sc_lib)
-
-
-call  create_multiple_user_cv_libraries(topologies)
-
-write(0,*)!--------------------------------------------
-write(0,*) 'INITIAL CV-LIBRARY WORKFLOW CONFIGURATION '
-write(0,*)!--------------------
-call configure_library_workflow(cv_lib_workflow_initial,topologies)
-
-
-
-
-if(run) then
-call run_library_workflow( &
-    cv_lib_workflow_initial,topologies, sc_lib, dom_lib, user_lib)
-
-end if
-
-write(0,*)!---------------------------------------------
-write(0,*) 'PRODUCTION CV-PLAN WORKFLOW CONFIGURATION '
-write(0,*)!-------------------- ------------------------ 
-
-call configure_cv_plan_workflow(cv_plan_workflow1,topologies)
-
-
-
-stop
-
-
-write(0,*) 'EUCLIDIAN LIFTING WORKFLWO CONFUGURATION:'
-call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
-
-
-
-if(run) then
-call run_euclidean_lifting_workflow(euclidian_lifting_workflow, project, topologies)
-end if
-
-
-stop
-	
-
-
-
-
-
-!call te_rep_workflow(cv_plan1,project,topologies)
-frame2p%istate=1;frame2p%irep=1;frame2p%itime=1
-call make_vmd_line_graph(project,topologies,cv_plan1,frame2p)
-
-!call get_pos_vecs_and_centroids(project,topologies,cv_plan1,frame2p)
-stop
 
 
 
@@ -392,32 +301,7 @@ call sample_rare_events(odf_lib,lifting_plan,10)
 
 !
 	
-stop
-!! 1. Selector für den State initialisieren (z.B. State 1 hat 10 Replikate)
-!call init_replica_selector(rep_selector, nrep_total=project%state(1)%nrep)
-!
-!! 2. Selektives Ausschalten für Cross-Validation (z.B. die letzten beiden weglassen)
-!rep_selector%is_active(3:10) = .false.
-!
-!! 3. Plan mit dem konfigurierten Selector initialisieren 
-!call init_sampling_plan(train_plan, project, istate=1, L=1000000, &
-!                        mode=SHUFFLE_INTER_REPLICA, selector=rep_selector)
-                        
-!call execute_healpix_analysis( &
-!        project      = project, &
-!        cv_p         = cv_plan1, &
-!        istate       = 1, &
-!        L            = 100000, &
-!        mode         = SHUFFLE_INTER_REPLICA, &
-!        selector     = rep_selector, &
-!        tau          = 100)
-!stop
-!call test_lift_cv_plan(cv_plan1,project)
-!test_healpix_density(tstart,tend,big_interval,tau,plan,project)
-!do irep=1,10
-!call test_healpix_density(1,1000000,1000,100,cv_plan1,project,1,irep,1)
-!end do
-!call test_lifting(topologies,sc_lib,dom_lib,project,6,7)
+
 write(0,*) 'all done'
 contains
 
@@ -857,6 +741,7 @@ subroutine configure_sub_workflows()
         write(output_unit, *) '15 = Configure SH Invariant Contraction Workflow'
         write(output_unit, *) '16 = Configure TE Matrix Plot Workflow'
         write(output_unit, *) '17 = Configure Active CV-Pair Filter Workflow'
+        write(output_unit, *) '18 = Configure ODF Analysis Workflow'
         write(output_unit, *) '0 = Return to Main Menu'
         write(output_unit, *)
         write(output_unit, '(A)', advance='no') 'Select option [0]: '
@@ -999,6 +884,13 @@ subroutine configure_sub_workflows()
             write(output_unit, *) '--------------------------------------------------'
             call configure_active_pair_filter_workflow(active_pair_filter_workflow)
 
+         case (18)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       ODF ANALYSIS WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_odf_analysis_workflow(odf_analysis_workflow)
+
          case default
          end select
     end do
@@ -1089,6 +981,7 @@ subroutine run_workflow_driver()
             write(output_unit, *) '-> Dry-run passed successfully! All configuration files are present.'
 
             write(output_unit, *) '-> Starting Execution Loop...'
+            write(output_unit, '(A)') '-> Appending executed configurations to workflow_execution.log'
             master_stack = ''
             call execute_master_tree(trim(master_cfg_filename), master_stack, 0)
             write(output_unit, *) 'All workflow steps completed successfully!'
@@ -1116,7 +1009,7 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
         odf_sampling_workflow_step_type_id, healpix_lifting_workflow_step_type_id, &
         histogram_sampling_workflow_step_type_id, sh_product_sampling_workflow_step_type_id, &
         sh_invariant_contraction_workflow_step_type_id, te_plot_workflow_step_type_id, &
-        active_pair_filter_workflow_step_type_id
+        active_pair_filter_workflow_step_type_id, odf_analysis_workflow_step_type_id
     use replicate_selector_workflow_module, only: replicate_selector_workflow_type, &
         read_replicate_selector_workflow, validate_replicate_selector_workflow
     use euclidean_lifting_workflow_io_module, only: read_euclidean_lifting_workflow, &
@@ -1143,6 +1036,8 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
     use active_pair_filter_workflow_module, only: active_pair_filter_workflow_type, &
         read_active_pair_filter_workflow, validate_active_pair_filter_workflow, &
         check_active_pair_filter_workflow_inputs
+    use odf_analysis_workflow_module, only: odf_analysis_workflow_type, &
+        read_odf_analysis_workflow, validate_odf_analysis_workflow, check_odf_analysis_workflow_inputs
     use workflow_module, only: cv_plan_workflow_type
     implicit none
 
@@ -1187,7 +1082,7 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
 
     do i = 1, master%n_steps
         if (master%steps(i)%step_type < 1 .or. &
-            master%steps(i)%step_type > active_pair_filter_workflow_step_type_id) then
+            master%steps(i)%step_type > odf_analysis_workflow_step_type_id) then
             write(error_unit, '(A,I0,A,A)') 'ERROR: Unknown workflow step type ', &
                 master%steps(i)%step_type, ' in ', trim(current_master)
             error stop 'Unknown workflow step type.'
@@ -1525,6 +1420,77 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
                     error stop 'Active-pair filter dry-run failed'
                 end if
             end block
+        else if (master%steps(i)%step_type == odf_analysis_workflow_step_type_id) then
+            block
+                type(odf_analysis_workflow_type) :: analysis_job
+                type(odf_sampling_workflow_type) :: sampling_job_a, sampling_job_b
+                character(len=1024) :: sampling_config_a, sampling_config_b
+                character(len=1024) :: sampling_cv_a, sampling_cv_b
+                integer :: previous_step
+                logical :: cv_a_generated, odfs_a_generated
+                logical :: cv_b_generated, odfs_b_generated
+
+                call read_odf_analysis_workflow(trim(step_config), analysis_job)
+                call validate_odf_analysis_workflow(analysis_job)
+                analysis_job%sampling_workflow_a = resolve_master_step_path( &
+                    step_config, trim(analysis_job%sampling_workflow_a))
+                if (analysis_job%compare_odfs) then
+                    analysis_job%sampling_workflow_b = resolve_master_step_path( &
+                        step_config, trim(analysis_job%sampling_workflow_b))
+                end if
+                analysis_job%entropy_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%entropy_filename))
+                analysis_job%analysis_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%analysis_filename))
+                analysis_job%comparison_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%comparison_filename))
+
+                call read_odf_sampling_workflow(trim(analysis_job%sampling_workflow_a), sampling_job_a)
+                sampling_cv_a = resolve_master_step_path(analysis_job%sampling_workflow_a, &
+                    trim(sampling_job_a%io_params%cv_plan_filename))
+                cv_a_generated = .false.
+                do generated_index = 1, generated_cv_plan_count
+                    if (trim(generated_cv_plan_files(generated_index)) == trim(sampling_cv_a)) then
+                        cv_a_generated = .true.
+                        exit
+                    end if
+                end do
+                odfs_a_generated = .false.
+                do previous_step = 1, i - 1
+                    if (master%steps(previous_step)%step_type /= odf_sampling_workflow_step_type_id) cycle
+                    sampling_config_a = resolve_master_step_path(current_master, &
+                        trim(master%steps(previous_step)%config_file))
+                    if (trim(sampling_config_a) == trim(analysis_job%sampling_workflow_a)) then
+                        odfs_a_generated = .true.
+                        exit
+                    end if
+                end do
+
+                cv_b_generated = .false.
+                odfs_b_generated = .false.
+                if (analysis_job%compare_odfs) then
+                    call read_odf_sampling_workflow(trim(analysis_job%sampling_workflow_b), sampling_job_b)
+                    sampling_cv_b = resolve_master_step_path(analysis_job%sampling_workflow_b, &
+                        trim(sampling_job_b%io_params%cv_plan_filename))
+                    do generated_index = 1, generated_cv_plan_count
+                        if (trim(generated_cv_plan_files(generated_index)) == trim(sampling_cv_b)) then
+                            cv_b_generated = .true.
+                            exit
+                        end if
+                    end do
+                    do previous_step = 1, i - 1
+                        if (master%steps(previous_step)%step_type /= odf_sampling_workflow_step_type_id) cycle
+                        sampling_config_b = resolve_master_step_path(current_master, &
+                            trim(master%steps(previous_step)%config_file))
+                        if (trim(sampling_config_b) == trim(analysis_job%sampling_workflow_b)) then
+                            odfs_b_generated = .true.
+                            exit
+                        end if
+                    end do
+                end if
+                call check_odf_analysis_workflow_inputs(analysis_job, cv_a_generated, odfs_a_generated, &
+                    cv_b_generated, odfs_b_generated)
+            end block
         end if
     end do
 end subroutine validate_master_tree
@@ -1537,8 +1503,9 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
         odf_sampling_workflow_step_type_id, healpix_lifting_workflow_step_type_id, &
         histogram_sampling_workflow_step_type_id, sh_product_sampling_workflow_step_type_id, &
         sh_invariant_contraction_workflow_step_type_id, te_plot_workflow_step_type_id, &
-        active_pair_filter_workflow_step_type_id
+        active_pair_filter_workflow_step_type_id, odf_analysis_workflow_step_type_id
     use random_seed_workflow_module, only: random_seed_workflow_type, read_seed_workflow, run_seed_workflow
+    use random_seed_workflow_module, only: begin_seed_workflow_execution, checkpoint_seed_workflow_state
     use trajectory_workflow_io_module, only: trajectory_workflow_type, read_trajectory_workflow, &
         run_trajectory_workflow
     use cv_lib_workflow_io_module, only: read_library_workflow, validate_library_workflow
@@ -1564,6 +1531,8 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
     use active_pair_filter_workflow_module, only: active_pair_filter_workflow_type, &
         read_active_pair_filter_workflow, validate_active_pair_filter_workflow, &
         run_active_pair_filter_workflow
+    use odf_analysis_workflow_module, only: odf_analysis_workflow_type, &
+        read_odf_analysis_workflow, validate_odf_analysis_workflow, run_odf_analysis_workflow
     implicit none
 
     character(len=*), intent(in) :: master_filename
@@ -1590,11 +1559,16 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
     next_master_stack(depth + 1) = current_master
     call read_master_workflow(master, trim(current_master))
     call validate_master_workflow(master)
+    if (depth == 0) call begin_seed_workflow_execution()
+    call append_workflow_config_log(trim(current_master))
 
     do i = 1, master%n_steps
         step_config = resolve_master_step_path(current_master, trim(master%steps(i)%config_file))
         write(output_unit, '(A,A,A,I0,A)') '>>> Executing Step: ', trim(master%steps(i)%step_name), &
             ' [type ', master%steps(i)%step_type, ']'
+        if (master%steps(i)%step_type /= master_workflow_step_type_id) then
+            call append_workflow_config_log(trim(step_config))
+        end if
 
         select case (master%steps(i)%step_type)
         case (1)
@@ -1810,6 +1784,24 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
                 call run_active_pair_filter_workflow(filter_job)
             end block
 
+        case (odf_analysis_workflow_step_type_id)
+            block
+                type(odf_analysis_workflow_type) :: analysis_job
+                call read_odf_analysis_workflow(trim(step_config), analysis_job)
+                call validate_odf_analysis_workflow(analysis_job)
+                analysis_job%cv_plan_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%cv_plan_filename))
+                analysis_job%odf_path = resolve_master_step_path( &
+                    step_config, trim(analysis_job%odf_path))
+                analysis_job%entropy_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%entropy_filename))
+                analysis_job%analysis_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%analysis_filename))
+                analysis_job%comparison_filename = resolve_master_step_path( &
+                    step_config, trim(analysis_job%comparison_filename))
+                call run_odf_analysis_workflow(analysis_job)
+            end block
+
         case (master_workflow_step_type_id)
             call execute_master_tree(trim(step_config), next_master_stack, depth + 1)
 
@@ -1821,8 +1813,91 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
         write(output_unit, '(3A)') '<<< Finished Step: ', trim(master%steps(i)%step_name), ' [DONE]'
     end do
 
+    if (depth == 0) call checkpoint_seed_workflow_state()
     write(output_unit, '(A,A)') 'Finished master workflow: ', trim(current_master)
 end subroutine execute_master_tree
+
+subroutine append_workflow_config_log(filename)
+    use iso_fortran_env, only: error_unit
+    implicit none
+
+    character(len=*), intent(in) :: filename
+    character(len=*), parameter :: log_filename = 'workflow_execution.log'
+    character(len=8192) :: line
+    character(len=32) :: timestamp
+    integer :: input_unit, log_unit, ios, close_ios, values(8)
+
+    open(newunit=input_unit, file=trim(filename), status='old', action='read', iostat=ios)
+    if (ios /= 0) then
+        write(error_unit, '(3A,I0)') 'Cannot read workflow configuration "', trim(filename), &
+            '"; I/O status ', ios
+        error stop 'Workflow configuration logging failed'
+    end if
+
+    open(newunit=log_unit, file=log_filename, status='unknown', action='write', &
+        position='append', iostat=ios)
+    if (ios /= 0) then
+        close(input_unit)
+        write(error_unit, '(3A,I0)') 'Cannot append workflow execution log "', log_filename, &
+            '"; I/O status ', ios
+        error stop 'Workflow execution log could not be opened'
+    end if
+
+    call date_and_time(values=values)
+    write(timestamp, '(I4.4,"-",I2.2,"-",I2.2," ",I2.2,":",I2.2,":",I2.2,".",I3.3)') &
+        values(1), values(2), values(3), values(5), values(6), values(7), values(8)
+    write(log_unit, '(A,A,A,A,A)', iostat=ios) '===== EXECUTED CONFIG: ', trim(filename), &
+        ' | ', trim(timestamp), ' ====='
+    if (ios /= 0) then
+        close(input_unit)
+        close(log_unit)
+        write(error_unit, '(3A,I0)') 'Error writing workflow execution log "', log_filename, &
+            '"; I/O status ', ios
+        error stop 'Workflow execution log failed'
+    end if
+
+    do
+        read(input_unit, '(A)', iostat=ios) line
+        if (ios < 0) exit
+        if (ios > 0) then
+            close(input_unit)
+            close(log_unit)
+            write(error_unit, '(3A,I0)') 'Error reading workflow configuration "', trim(filename), &
+                '"; I/O status ', ios
+            error stop 'Workflow configuration logging failed'
+        end if
+        write(log_unit, '(A)', iostat=ios) trim(line)
+        if (ios /= 0) then
+            close(input_unit)
+            close(log_unit)
+            write(error_unit, '(3A,I0)') 'Error writing workflow execution log "', log_filename, &
+                '"; I/O status ', ios
+            error stop 'Workflow execution log failed'
+        end if
+    end do
+    write(log_unit, '(A)', iostat=ios) '===== END CONFIG ====='
+    if (ios /= 0) then
+        close(input_unit)
+        close(log_unit)
+        write(error_unit, '(3A,I0)') 'Error writing workflow execution log "', log_filename, &
+            '"; I/O status ', ios
+        error stop 'Workflow execution log failed'
+    end if
+
+    close(input_unit, iostat=close_ios)
+    if (close_ios /= 0) then
+        close(log_unit)
+        write(error_unit, '(3A,I0)') 'Error closing workflow configuration "', trim(filename), &
+            '"; I/O status ', close_ios
+        error stop 'Workflow configuration logging failed'
+    end if
+    close(log_unit, iostat=close_ios)
+    if (close_ios /= 0) then
+        write(error_unit, '(3A,I0)') 'Error closing workflow execution log "', log_filename, &
+            '"; I/O status ', close_ios
+        error stop 'Workflow execution log failed'
+    end if
+end subroutine append_workflow_config_log
 
 function resolve_master_step_path(master_filename, configured_path) result(resolved_path)
     implicit none

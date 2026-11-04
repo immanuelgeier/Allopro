@@ -16,6 +16,7 @@ character(len=40), parameter :: euclidean_lifting_workflow_config_stem = 'euclid
 character(len=40), parameter :: centroid_distance_histogram_workflow_config_stem = &
     'centroid_distance_histogram_workflow'
 character(len=40), parameter :: odf_sampling_workflow_config_stem = 'odf_sampling_workflow'
+character(len=40), parameter :: odf_analysis_workflow_config_stem = 'odf_analysis_workflow'
 character(len=40), parameter :: healpix_lifting_workflow_config_stem = 'healpix_lifting_workflow'
 character(len=40), parameter :: histogram_sampling_workflow_config_stem = 'histogram_sampling_workflow'
 character(len=40), parameter :: sh_product_sampling_workflow_config_stem = 'sh_product_sampling_workflow'
@@ -241,6 +242,25 @@ end type
         type(odf_sampling_io_params_type) :: io_params
     end type odf_sampling_workflow_type
 
+    type :: odf_analysis_workflow_type
+        logical :: analyze_entropy = .true.
+        logical :: analyze_details = .true.
+        logical :: compare_odfs = .false.
+        integer :: lag_a = 0
+        integer :: lag_b = 0
+        integer :: cv_index_a = 1
+        integer :: cv_component_a = 1
+        integer :: cv_index_b = 1
+        integer :: cv_component_b = 1
+        character(len=1024) ::  odf_path= '.'
+        character(len=1024) ::  cv_plan_filename= 'cv_plan.dat'
+        character(len=1024) :: sampling_workflow_a = 'odf_sampling_workflow.cfg'
+        character(len=1024) :: sampling_workflow_b = ''
+        character(len=1024) :: entropy_filename = 'odf_entropy.txt'
+        character(len=1024) :: analysis_filename = 'odf_analysis.txt'
+        character(len=1024) :: comparison_filename = 'odf_comparison.txt'
+    end type odf_analysis_workflow_type
+
     type :: healpix_lifting_model_params_type
         integer :: state = 1
         integer :: npix = 12288
@@ -275,6 +295,7 @@ end type
         integer :: max_chunk_size = 2*10**8
         integer :: nrun_shuffle = 1
         integer :: block_size_shuffle = 10000
+        logical :: load_block_permutations = .false.
         real(8) :: tau_mem = 100.0_8
         real(8) :: dt = 1.0_8
         real(8) :: max_ram_gb = 8.0_8
@@ -291,6 +312,7 @@ end type
         character(len=256) :: histogram_prefix = 'histogram'
         character(len=1024) :: odf_path = '.'
         character(len=256) :: odf_prefix = 'odf_'
+        character(len=1024) :: block_permutation_filename = 'block_permutations.dat'
         character(len=16) :: histogram_output_policy = 'replace'
     end type histogram_sampling_io_params_type
 

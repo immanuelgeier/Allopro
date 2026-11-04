@@ -7,12 +7,16 @@ module random_seed_io_module
 
     public :: random_seed_config_type,configure_seed
     public :: initialize_random_seed
+    public :: initialize_random_seed_from_state
+    public :: save_random_seed_state
 
     type :: random_seed_config_type
         logical :: use_saved_seed = .false.
         logical :: save_seed      = .true.
+        logical :: resume_state   = .false.
 
         character(len=1024) :: seed_file = 'random_seed.dat'
+        character(len=1024) :: state_file = 'random_state.dat'
 
         integer, allocatable :: seed(:)
     end type random_seed_config_type
@@ -97,14 +101,11 @@ end subroutine configure_seed
 
         integer :: n
         integer :: i
-        integer :: clock
         integer :: unit
         integer :: ios
         integer :: n_file
 
         integer(int64) :: clock64
-
-        logical :: file_exists
 
         ! Benötigte Laenge des Seed-Vektors bestimmen.
         call random_seed(size=n)
@@ -178,5 +179,80 @@ end subroutine configure_seed
         end if
 
     end subroutine initialize_random_seed
+
+    subroutine initialize_random_seed_from_state(config, state_filename)
+        type(random_seed_config_type), intent(inout) :: config
+        character(len=*), intent(in) :: state_filename
+
+        integer, allocatable :: state(:)
+        integer :: n, n_file, unit, ios, close_ios
+        logical :: file_exists, seed_file_exists
+
+        inquire(file=trim(state_filename), exist=file_exists)
+        if (.not. file_exists) then
+            write(*,'(3A)') 'No saved generator state at "', trim(state_filename), &
+                '"; initializing from the configured seed.'
+            if (config%use_saved_seed) then
+                inquire(file=trim(config%seed_file), exist=seed_file_exists)
+                if (.not. seed_file_exists .and. config%save_seed) then
+                    write(*,'(3A)') 'No saved seed at "', trim(config%seed_file), &
+                        '"; generating and saving the initial seed.'
+                    config%use_saved_seed = .false.
+                end if
+            end if
+            call initialize_random_seed(config)
+            return
+        end if
+
+        call random_seed(size=n)
+        open(newunit=unit, file=trim(state_filename), status='old', action='read', iostat=ios)
+        if (ios /= 0) error stop 'Could not open random generator state file'
+
+        read(unit, *, iostat=ios) n_file
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Could not read random generator state size'
+        end if
+        if (n_file /= n) then
+            close(unit)
+            error stop 'Random generator state size does not match compiler'
+        end if
+
+        allocate(state(n))
+        read(unit, *, iostat=ios) state
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Could not read random generator state'
+        end if
+        close(unit, iostat=close_ios)
+        if (close_ios /= 0) error stop 'Could not close random generator state file'
+
+        call random_seed(put=state)
+        write(*,'(3A)') 'Resumed random generator state from "', trim(state_filename), '".'
+    end subroutine initialize_random_seed_from_state
+
+    subroutine save_random_seed_state(state_filename)
+        character(len=*), intent(in) :: state_filename
+
+        integer, allocatable :: state(:)
+        integer :: n, unit, ios, close_ios
+
+        call random_seed(size=n)
+        allocate(state(n))
+        call random_seed(get=state)
+
+        open(newunit=unit, file=trim(state_filename), status='replace', action='write', iostat=ios)
+        if (ios /= 0) error stop 'Could not open random generator state file for writing'
+
+        write(unit, *, iostat=ios) n
+        if (ios == 0) write(unit, *, iostat=ios) state
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Could not write random generator state'
+        end if
+
+        close(unit, iostat=close_ios)
+        if (close_ios /= 0) error stop 'Could not close random generator state file'
+    end subroutine save_random_seed_state
 
 end module random_seed_io_module

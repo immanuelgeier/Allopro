@@ -765,14 +765,14 @@ end subroutine write_entropy
 
 
 
-subroutine sample_odfs_C2( &
+subroutine sample_odfs( &
     odf_lib, &
     lifting_plan, &
     prefix_tra, &
     path_tra, &
     basis_index, &
     tau_mem, &
-    dt, prefix_odf,path_odf,output_policy)
+    dt, prefix_odf,path_odf,output_policy,perform_analysis)
 
     implicit none
 
@@ -785,6 +785,7 @@ subroutine sample_odfs_C2( &
 
     real(8), intent(in) :: tau_mem
     real(8), intent(in) :: dt
+    logical, intent(in), optional :: perform_analysis
 
     character(len=2048) :: filename
     character(len=2048) :: path_and_prefix
@@ -803,9 +804,12 @@ subroutine sample_odfs_C2( &
     real(8) :: length
 
     real(8), allocatable :: rots(:,:,:)
+    logical :: analyze_results
 
 
     length = huge(length)
+    analyze_results = .true.
+    if (present(perform_analysis)) analyze_results = perform_analysis
 
     path_and_prefix = trim(path_tra) // '/' // trim(prefix_tra)
 
@@ -924,16 +928,18 @@ subroutine sample_odfs_C2( &
         end do
     end do
 
-
     write(0,*) 'final', length
 
 
     call write_odf_lib(odf_lib,prefix_odf,path_odf,output_policy)
-    call compute_odf_entropy_levels(odf_lib)
-    call write_entropy(odf_lib)
-    call write_odf_analysis_text(odf_lib)
 
-end subroutine sample_odfs_C2
+    if (analyze_results) then
+        call compute_odf_entropy_levels(odf_lib)
+        call write_entropy(odf_lib)
+        call write_odf_analysis_text(odf_lib)
+    end if
+
+end subroutine sample_odfs
 
 
 

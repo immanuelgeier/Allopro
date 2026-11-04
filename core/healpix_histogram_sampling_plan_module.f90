@@ -884,7 +884,8 @@ end subroutine execute_sampling_plan
     
 subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                                           npix, lag, shuffle_block_size, &
-                                          nshuffle, lifted_prefix, output_prefix, output_actions)
+                                          nshuffle, lifted_prefix, output_prefix, output_actions, &
+                                          load_permutations, permutation_filename)
 
     use iso_fortran_env, only: real32, int32, int64
     use output_policy_module, only: OUTPUT_WRITE
@@ -904,6 +905,8 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
     character(len=*), intent(in) :: lifted_prefix
     character(len=*), intent(in) :: output_prefix
     integer, intent(in), optional :: output_actions(:)
+    logical, intent(in), optional :: load_permutations
+    character(len=*), intent(in), optional :: permutation_filename
 
     ! ============================================================
     ! Trajektorien-Daten
@@ -946,6 +949,7 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
     integer, allocatable :: shuffle_map(:)
     integer, allocatable :: shuffle_source_iblock(:)
     integer, allocatable :: shuffle_source_local(:)
+    integer, allocatable :: block_permutation(:)
 
     ! ============================================================
     ! Metadaten der iblocks der aktuellen Replikation
@@ -985,6 +989,7 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
     integer :: nblock
     integer :: nframes_rep
     integer :: nframes_to_sample
+    integer :: nshuffle_blocks
 
     integer :: t
     integer :: global_t
@@ -1018,6 +1023,8 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
 
     logical :: source_data_loaded
     logical :: is_rep1
+    logical :: use_saved_permutations
+    logical :: reuse_saved_permutation
 
     real(8) :: t_pass_start
     real(8) :: t_start_section
@@ -1040,6 +1047,22 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
     if (lag < 0) then
         write(0,*) 'ERROR: lag must be >= 0'
         error stop
+    end if
+
+    use_saved_permutations = .false.
+    if (present(load_permutations)) use_saved_permutations = load_permutations
+    if (use_saved_permutations) then
+        if (.not. present(permutation_filename)) then
+            error stop 'A permutation filename is required when loading block permutations'
+        end if
+        if (len_trim(permutation_filename) == 0) then
+            error stop 'Block permutation filename must not be empty'
+        end if
+    end if
+    if (present(permutation_filename)) then
+        if (len_trim(permutation_filename) > 0 .and. .not. use_saved_permutations) then
+            call initialize_block_permutation_file(trim(permutation_filename))
+        end if
     end if
 
     write(0,*) '-----------------------------------------------------'
@@ -1197,12 +1220,30 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                     allocate(shuffle_map(nframes_rep))
                     allocate(shuffle_source_iblock(nframes_rep))
                     allocate(shuffle_source_local(nframes_rep))
+                    nshuffle_blocks = 1 + (nframes_rep - 1) / shuffle_block_size
+                    allocate(block_permutation(nshuffle_blocks))
 
-
-                    call build_block_shuffle( &
-                        nframes_rep, &
-                        shuffle_block_size, &
-                        shuffle_map)
+                    reuse_saved_permutation = use_saved_permutations
+                    if (present(permutation_filename)) then
+                        if (len_trim(permutation_filename) > 0 .and. igroup > 1) then
+                            reuse_saved_permutation = .true.
+                        end if
+                    end if
+                    if (reuse_saved_permutation) then
+                        call read_block_permutation(trim(permutation_filename), &
+                            lifting_plan%istates(istate), lifting_plan%ireps(istate,irep), &
+                            ishuffle, nframes_rep, shuffle_block_size, block_permutation)
+                    else
+                        call generate_block_permutation(nframes_rep, shuffle_block_size, block_permutation)
+                        if (present(permutation_filename)) then
+                            if (len_trim(permutation_filename) > 0) then
+                                call append_block_permutation(trim(permutation_filename), &
+                                    lifting_plan%istates(istate), lifting_plan%ireps(istate,irep), &
+                                    ishuffle, nframes_rep, shuffle_block_size, block_permutation)
+                            end if
+                        end if
+                    end if
+                    call build_block_shuffle(nframes_rep, shuffle_block_size, block_permutation, shuffle_map)
 
 
                     ! -------------------------------------------------
@@ -1559,6 +1600,7 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                     deallocate(shuffle_map)
                     deallocate(shuffle_source_iblock)
                     deallocate(shuffle_source_local)
+                    deallocate(block_permutation)
 
                     deallocate(block_nframe)
                     deallocate(block_start)
@@ -1658,131 +1700,177 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
 
 end subroutine execute_shuffle_sampling_plan
    
-subroutine build_block_shuffle(nframes, block_size, shuffle_map)
+subroutine initialize_block_permutation_file(filename)
+    character(len=*), intent(in) :: filename
+    integer :: unit, ios
 
-    use iso_fortran_env, only: int32
+    open(newunit=unit, file=trim(filename), status='replace', action='write', iostat=ios)
+    if (ios /= 0) then
+        write(0,'(A,A)') 'Cannot create block permutation file: ', trim(filename)
+        error stop 'Block permutation output failed'
+    end if
+    write(unit,'(A)',iostat=ios) '# block permutation format 1'
+    if (ios /= 0) then
+        close(unit)
+        error stop 'Cannot write block permutation file header'
+    end if
+    close(unit, iostat=ios)
+    if (ios /= 0) error stop 'Cannot close block permutation file'
+end subroutine initialize_block_permutation_file
 
-    implicit none
+subroutine append_block_permutation(filename, state_id, replica_id, shuffle_id, &
+                                    nframes, block_size, permutation)
+    character(len=*), intent(in) :: filename
+    integer, intent(in) :: state_id, replica_id, shuffle_id, nframes, block_size
+    integer, intent(in) :: permutation(:)
+    integer :: unit, ios
 
-    integer, intent(in)  :: nframes
-    integer, intent(in)  :: block_size
-    integer, intent(out) :: shuffle_map(:)
+    open(newunit=unit, file=trim(filename), status='old', action='write', &
+        position='append', iostat=ios)
+    if (ios /= 0) then
+        write(0,'(A,A)') 'Cannot append block permutation file: ', trim(filename)
+        error stop 'Block permutation output failed'
+    end if
+    write(unit,*,iostat=ios) state_id, replica_id, shuffle_id, nframes, block_size, size(permutation)
+    if (ios == 0) write(unit,'(*(I0,1X))',iostat=ios) permutation
+    if (ios /= 0) then
+        close(unit)
+        error stop 'Cannot write block permutation record'
+    end if
+    close(unit, iostat=ios)
+    if (ios /= 0) error stop 'Cannot close block permutation file'
+end subroutine append_block_permutation
 
-    integer :: nblocks
-    integer :: b
-    integer :: k
-    integer :: src_block
-    integer :: dst_block
+subroutine read_block_permutation(filename, state_id, replica_id, shuffle_id, &
+                                  nframes, block_size, permutation)
+    character(len=*), intent(in) :: filename
+    integer, intent(in) :: state_id, replica_id, shuffle_id, nframes, block_size
+    integer, intent(out) :: permutation(:)
+    character(len=4096) :: line
+    integer, allocatable :: record_permutation(:)
+    integer :: unit, ios, record_state, record_replica, record_shuffle
+    integer :: record_nframes, record_block_size, record_nblocks
+    logical :: found
 
-    integer :: src_start
-    integer :: src_end
-    integer :: dst_start
-    integer :: dst_end
-
-    integer :: offset
-    integer :: src_frame
-    integer :: dst_frame
-
-    integer :: tmp
-    real(8) :: r
-
-    integer, allocatable :: permutation(:)
-
-
-    if (nframes <= 0) then
-        write(0,*) 'ERROR: nframes <= 0 in build_block_shuffle'
-        error stop
+    open(newunit=unit, file=trim(filename), status='old', action='read', iostat=ios)
+    if (ios /= 0) then
+        write(0,'(A,A)') 'Cannot read block permutation file: ', trim(filename)
+        error stop 'Block permutation input failed'
     end if
 
-    if (block_size <= 0) then
-        write(0,*) 'ERROR: block_size <= 0 in build_block_shuffle'
-        error stop
-    end if
+    found = .false.
+    do
+        read(unit,'(A)',iostat=ios) line
+        if (ios < 0) exit
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Error reading block permutation record'
+        end if
+        line = adjustl(line)
+        if (len_trim(line) == 0 .or. line(1:1) == '#') cycle
 
-    if (size(shuffle_map) /= nframes) then
-        write(0,*) 'ERROR: wrong shuffle_map size'
-        error stop
-    end if
+        read(line,*,iostat=ios) record_state, record_replica, record_shuffle, &
+            record_nframes, record_block_size, record_nblocks
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Invalid block permutation record header'
+        end if
+        if (record_nblocks < 1) then
+            close(unit)
+            error stop 'Invalid block permutation record header'
+        end if
+        allocate(record_permutation(record_nblocks))
+        read(unit,*,iostat=ios) record_permutation
+        if (ios /= 0) then
+            close(unit)
+            error stop 'Invalid block permutation record data'
+        end if
 
-
-    ! ------------------------------------------------------------
-    ! Anzahl Blöcke
-    !
-    ! Der letzte Block darf kürzer sein.
-    ! ------------------------------------------------------------
-
-    nblocks = (nframes + block_size - 1) / block_size
-
-    allocate(permutation(nblocks))
-
-
-    do b = 1, nblocks
-        permutation(b) = b
+        if (record_state == state_id .and. record_replica == replica_id .and. &
+            record_shuffle == shuffle_id) then
+            if (record_nframes /= nframes .or. record_block_size /= block_size .or. &
+                record_nblocks /= size(permutation)) then
+                close(unit)
+                error stop 'Saved block permutation does not match trajectory metadata'
+            end if
+            permutation = record_permutation
+            found = .true.
+            deallocate(record_permutation)
+            exit
+        end if
+        deallocate(record_permutation)
     end do
 
+    close(unit, iostat=ios)
+    if (ios /= 0) error stop 'Cannot close block permutation file'
+    if (.not. found) then
+        write(0,'(A,I0,A,I0,A,I0)') 'No saved block permutation for state ', &
+            state_id, ', replica ', replica_id, ', shuffle ', shuffle_id
+        error stop 'Block permutation record is missing'
+    end if
+end subroutine read_block_permutation
 
-    ! ------------------------------------------------------------
-    ! Fisher-Yates auf Blockebene
-    ! ------------------------------------------------------------
+subroutine generate_block_permutation(nframes, block_size, permutation)
+    integer, intent(in) :: nframes, block_size
+    integer, intent(out) :: permutation(:)
+    integer :: nblocks, k, b, tmp
+    real(8) :: r
 
-    	
-     	
+    if (nframes <= 0 .or. block_size <= 0) error stop 'Invalid block permutation dimensions'
+    nblocks = 1 + (nframes - 1) / block_size
+    if (size(permutation) /= nblocks) error stop 'Wrong block permutation size'
+
+    permutation = [(b, b=1,nblocks)]
     do k = nblocks, 2, -1
-
         call random_number(r)
-
         b = 1 + int(r * real(k,8))
-
-        if (b < 1) b = 1
-        if (b > k) b = k
-
+        b = min(max(b,1),k)
         tmp = permutation(k)
         permutation(k) = permutation(b)
         permutation(b) = tmp
-
     end do
+end subroutine generate_block_permutation
 
+subroutine build_block_shuffle(nframes, block_size, permutation, shuffle_map)
+    integer, intent(in) :: nframes, block_size
+    integer, intent(in) :: permutation(:)
+    integer, intent(out) :: shuffle_map(:)
+    logical, allocatable :: seen(:)
+    integer :: nblocks, dst_block, src_block
+    integer :: src_start, src_end, dst_start, frame_offset, dst_frame
 
-    ! ------------------------------------------------------------
-    ! shuffle_map aufbauen
-    !
-    ! shuffle_map(dst_frame) = src_frame
-    !
-    ! Der Offset innerhalb des Blocks bleibt erhalten.
-    ! ------------------------------------------------------------
+    if (nframes <= 0 .or. block_size <= 0) error stop 'Invalid block shuffle dimensions'
+    if (size(shuffle_map) /= nframes) error stop 'Wrong shuffle map size'
+    nblocks = 1 + (nframes - 1) / block_size
+    if (size(permutation) /= nblocks) error stop 'Wrong block permutation size'
+
+    allocate(seen(nblocks))
+    seen = .false.
+    do dst_block = 1, nblocks
+        src_block = permutation(dst_block)
+        if (src_block < 1 .or. src_block > nblocks) error stop 'Block permutation index out of bounds'
+        if (seen(src_block)) error stop 'Block permutation contains a duplicate index'
+        seen(src_block) = .true.
+    end do
 
     shuffle_map = 0
-
-
+    dst_start = 1
     do dst_block = 1, nblocks
-
         src_block = permutation(dst_block)
-
-
         src_start = (src_block - 1) * block_size + 1
-        src_end   = min(src_block * block_size, nframes)
-
-        dst_start = (dst_block - 1) * block_size + 1
-        dst_end   = min(dst_block * block_size, nframes)
-
-
-        do src_frame = src_start, src_end
-
-            offset = src_frame - src_start
-
-            dst_frame = dst_start + offset
-
-            if (dst_frame <= dst_end) then
-                shuffle_map(dst_frame) = src_frame
-            end if
-
+        src_end = min(src_block * block_size, nframes)
+        do frame_offset = 0, src_end - src_start
+            dst_frame = dst_start + frame_offset
+            shuffle_map(dst_frame) = src_start + frame_offset
         end do
-
+        dst_start = dst_start + src_end - src_start + 1
     end do
 
-
-    deallocate(permutation)
-
+    if (dst_start /= nframes + 1) error stop 'Block shuffle map has an invalid length'
+    if (any(shuffle_map < 1) .or. any(shuffle_map > nframes)) then
+        error stop 'Block shuffle map is incomplete'
+    end if
+    deallocate(seen)
 end subroutine build_block_shuffle
 
 subroutine locate_replication_frame(global_frame, block_start, &
