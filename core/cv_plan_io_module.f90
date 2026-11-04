@@ -14,7 +14,9 @@ contains
     subroutine write_cv_plan(plan, filename)
         type(cv_plan), intent(in) :: plan
         character(len=*), intent(in) :: filename
+        character(len=2048) :: names_filename
         integer :: unit, ios
+        integer :: separator
 
         open(newunit=unit, file=trim(filename), status='replace', action='write', iostat=ios)
         if (ios /= 0) then
@@ -23,7 +25,13 @@ contains
         end if
 
         call write_cv_plan_unit(plan, unit)
-        call write_cv_names_file(plan, 'names_'//trim(filename))
+        separator = scan(trim(filename), '/', back=.true.)
+        if (separator > 0) then
+            names_filename = filename(:separator)//'names_'//trim(filename(separator+1:))
+        else
+            names_filename = 'names_'//trim(filename)
+        end if
+        call write_cv_names_file(plan, trim(names_filename))
         close(unit, iostat=ios)
     end subroutine write_cv_plan
 

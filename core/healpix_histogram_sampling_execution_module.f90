@@ -28,6 +28,8 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
 ,block_shuffle,nrun_shuffle,block_size_shuffle&
 ,only_lifting,prefix_odf,path_odf,pair_active)
 
+    use output_policy_module, only: get_output_prefix, check_output_policy, &
+        OUTPUT_ABORT
     implicit none
 
     type(odf_lib_type),       intent(inout) :: odf_lib
@@ -52,7 +54,10 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
     real(int64)   :: in_counts
     type(sampling_plan_type) :: plan!_healpix_lifting
     character(len=2048) :: path_and_prefix_vec_tra,path_and_prefix_tra,path_and_prefix_hist
+    character(len=2048) :: effective_hist_prefix, histogram_file
     logical, intent(in) :: pair_active(:,:)
+    integer, allocatable :: output_actions(:)
+    integer :: ichunk, ishuffle, output_action, output_index
     
     npix = 2**(nlevel_target - 1)
     npix = 12 * npix * npix
@@ -100,13 +105,34 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
     call create_sampling_plan(plan, pair_map, n_chunks, max_ram_gb)
 
     
-    path_and_prefix_hist =trim(path_hist)//'/'//trim(prefix_hist)
+    effective_hist_prefix = get_output_prefix(prefix_hist, file_policy_hist)
+    path_and_prefix_hist =trim(path_hist)//'/'//trim(effective_hist_prefix)
+    if (block_shuffle) then
+        allocate(output_actions(nrun_shuffle * size(plan%chunk2group)))
+        do ishuffle = 1, nrun_shuffle
+            do ichunk = 1, size(plan%chunk2group)
+                output_index = (ishuffle - 1) * size(plan%chunk2group) + ichunk
+                call make_shuffle_te_chunk_filename(path_and_prefix_hist, ishuffle, ichunk, histogram_file)
+                call check_output_policy(trim(histogram_file), file_policy_hist, output_action)
+                if (output_action == OUTPUT_ABORT) error stop 'Histogram output policy aborted workflow'
+                output_actions(output_index) = output_action
+            end do
+        end do
+    else
+        allocate(output_actions(size(plan%chunk2group)))
+        do ichunk = 1, size(plan%chunk2group)
+            call make_te_chunk_filename(path_and_prefix_hist, ichunk, histogram_file)
+            call check_output_policy(trim(histogram_file), file_policy_hist, output_action)
+            if (output_action == OUTPUT_ABORT) error stop 'Histogram output policy aborted workflow'
+            output_actions(ichunk) = output_action
+        end do
+    end if
      
     if( block_shuffle) then	
     call execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                                           npix, lag, block_size_shuffle, &
                                           nrun_shuffle, path_and_prefix_tra&
-                                          , path_and_prefix_hist)
+                                          , path_and_prefix_hist, output_actions)
                                           
       ! call execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
       !                                    npix, lag, block_size_shuffle, &
@@ -117,7 +143,7 @@ subroutine run_te_workflow(odf_lib, lifting_plan,lag,basis_index&
      else
   
     call execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
-                               npix, lag, path_and_prefix_tra, path_and_prefix_hist)
+                               npix, lag, path_and_prefix_tra, path_and_prefix_hist, output_actions)
     
      !call execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
      !                          npix, lag, 'lifted_healpix_tra_lag2_mem', 'histogram_chunk_lag2')                           

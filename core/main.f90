@@ -36,6 +36,15 @@ use trajectory_workflow_io_module
 use test_trajectory_workflow_module
 use graphical_representation_workflow_io_module
 use replicate_selector_workflow_module
+use centroid_distance_histogram_workflow_module
+use odf_sampling_workflow_module
+use healpix_lifting_workflow_module
+use histogram_sampling_workflow_module
+use sh_product_sampling_workflow_module
+use sh_invariant_contraction_workflow_module
+use te_plot_workflow_module
+use active_pair_filter_workflow_module
+use sh_product_rotation_invariance_test_module
 
 implicit none
 
@@ -60,6 +69,14 @@ type(trajectory_workflow_type) :: traj_workflow
 type(test_trajectory_workflow_type) :: write_test_tra
 type(graphical_representation_workflow_type) :: plot_vectors_vmd
 type(replicate_selector_workflow_type) :: replicate_selector_workflow
+type(centroid_distance_histogram_workflow_type) :: centroid_histogram_workflow
+type(odf_sampling_workflow_type) :: odf_sampling_workflow
+type(healpix_lifting_workflow_type) :: healpix_lifting_workflow
+type(histogram_sampling_workflow_type) :: histogram_sampling_workflow
+type(sh_product_sampling_workflow_type) :: sh_product_sampling_workflow
+type(sh_invariant_contraction_workflow_type) :: sh_invariant_contraction_workflow
+type(te_plot_workflow_type) :: te_plot_workflow
+type(active_pair_filter_workflow_type) :: active_pair_filter_workflow
 !integer :: irep,istate
 
 logical :: found
@@ -68,7 +85,6 @@ logical, allocatable :: matrix_active_final(:,:)
 
 type(random_seed_workflow_type) ::seed_job, initial_seed_workflow,prodcution_seed_workflow
 logical :: run
-
 
 !call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
 !stop
@@ -239,7 +255,8 @@ write(0,*)
 
 
 if(1==2) then
-call run_centroid_distance_histogram(lifting_plan, '/media/pbuser/T7/lifted_trajectories/cvec_tra')
+call run_centroid_distance_histogram(lifting_plan, '/media/pbuser/T7/lifted_trajectories/cvec_tra', &
+    '/media/pbuser/T7/lifted_trajectories/cvec_tra_distance_histogram.dat')
 end if
 
 
@@ -294,17 +311,17 @@ nobj=162)
 
 
 if(1==2) then
-call sample_odfs_C2( &
-    odf_lib, &
-    lifting_plan, &
-    prefix_tra='vec_tra', &
-    path_tra='/media/pbuser/T7/lifted_trajectories/', &
-    basis_index=9, &
-    tau_mem            = 100._8, &
-    dt                 = 1._8,&
-    prefix_odf ='odf_',&
-    path_odf   ='/home/pbuser/Schreibtisch/workspace_mdgraph/project/output/3lnx/',&
-    output_policy= 'replace')
+!call sample_odfs_C2( &
+!    odf_lib, &
+!    lifting_plan, &
+!    prefix_tra='vec_tra', &
+!    path_tra='/media/pbuser/T7/lifted_trajectories/', &
+!    basis_index=9, &
+!    tau_mem            = 100._8, &
+!    dt                 = 1._8,&
+!    prefix_odf ='odf_',&
+!    path_odf   ='/home/pbuser/Schreibtisch/workspace_mdgraph/project/output/3lnx/',&
+!    output_policy= 'replace')
     end if
 
 
@@ -832,6 +849,14 @@ subroutine configure_sub_workflows()
         write(output_unit, *) '7 = Configure Gaphical-Rep-VMD-CV Workflow'
         write(output_unit, *) '8 = Configure Replicate Selector Workflow'
         write(output_unit, *) '9 = Configure Euclidean Lifting Workflow'
+        write(output_unit, *) '10 = Configure Centroid Distance Histogram Workflow'
+        write(output_unit, *) '11 = Configure ODF Sampling Workflow'
+        write(output_unit, *) '12 = Configure HEALPix Trajectory Lifting Workflow'
+        write(output_unit, *) '13 = Configure Histogram Sampling Workflow'
+        write(output_unit, *) '14 = Configure SH Product Sampling Workflow'
+        write(output_unit, *) '15 = Configure SH Invariant Contraction Workflow'
+        write(output_unit, *) '16 = Configure TE Matrix Plot Workflow'
+        write(output_unit, *) '17 = Configure Active CV-Pair Filter Workflow'
         write(output_unit, *) '0 = Return to Main Menu'
         write(output_unit, *)
         write(output_unit, '(A)', advance='no') 'Select option [0]: '
@@ -918,6 +943,62 @@ subroutine configure_sub_workflows()
             write(output_unit, *) '--------------------------------------------------'
             call configure_euclidean_lifting_workflow(euclidian_lifting_workflow)
 
+         case (10)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) ' CENTROID DISTANCE HISTOGRAM WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_centroid_distance_histogram_workflow(centroid_histogram_workflow)
+
+         case (11)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       ODF SAMPLING WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_odf_sampling_workflow(odf_sampling_workflow)
+
+         case (12)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '    HEALPIX TRAJECTORY LIFTING WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_healpix_lifting_workflow(healpix_lifting_workflow)
+
+         case (13)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       HISTOGRAM SAMPLING WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_histogram_sampling_workflow(histogram_sampling_workflow)
+
+         case (14)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       SH PRODUCT SAMPLING WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_sh_product_sampling_workflow(sh_product_sampling_workflow)
+
+         case (15)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       SH INVARIANT CONTRACTION CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_sh_invariant_contraction_workflow(sh_invariant_contraction_workflow)
+
+         case (16)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       TE MATRIX PLOT WORKFLOW CONFIGURATION'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_te_plot_workflow(te_plot_workflow)
+
+         case (17)
+            write(output_unit, *)
+            write(output_unit, *) '--------------------------------------------------'
+            write(output_unit, *) '       ACTIVE CV-PAIR FILTER WORKFLOW'
+            write(output_unit, *) '--------------------------------------------------'
+            call configure_active_pair_filter_workflow(active_pair_filter_workflow)
+
          case default
          end select
     end do
@@ -938,7 +1019,9 @@ subroutine run_workflow_driver()
     type(master_workflow_type) :: master
     character(len=1024) :: master_stack(64)
     character(len=1024) :: generated_selector_files(256)
-    integer :: generated_selector_count
+    character(len=1024) :: generated_lifting_plan_files(256)
+    character(len=1024) :: generated_cv_plan_files(256)
+    integer :: generated_selector_count, generated_lifting_plan_count, generated_cv_plan_count
     logical :: running
 
     ! Initialize project and topologies once, before entering the menu loop.
@@ -954,6 +1037,7 @@ subroutine run_workflow_driver()
         write(output_unit, *) '2 = Configure master workflow only (using existing configs)'
         write(output_unit, *) '3 = Validate, Dry-Run and Execute master workflow (Batch)'
         write(output_unit, *) '4 = Quit'
+        write(output_unit, *) '5 = Run synthetic SH rotation-invariance test'
         write(output_unit, *)
         write(output_unit, '(A)', advance='no') 'Select option [3]: '
 
@@ -962,7 +1046,7 @@ subroutine run_workflow_driver()
         if (len_trim(input) > 0) then
             read(input,*,iostat=ios) main_choice
             if (ios /= 0) then
-                write(error_unit, '(A)') 'Invalid main option. Please enter a number from 1 to 4.'
+                write(error_unit, '(A)') 'Invalid main option. Please enter a number from 1 to 5.'
                 cycle
             end if
         end if
@@ -994,8 +1078,14 @@ subroutine run_workflow_driver()
             master_stack = ''
             generated_selector_files = ''
             generated_selector_count = 0
+            generated_lifting_plan_files = ''
+            generated_lifting_plan_count = 0
+            generated_cv_plan_files = ''
+            generated_cv_plan_count = 0
             call validate_master_tree(trim(master_cfg_filename), master_stack, 0, &
-                generated_selector_files, generated_selector_count)
+                generated_selector_files, generated_selector_count, &
+                generated_lifting_plan_files, generated_lifting_plan_count, &
+                generated_cv_plan_files, generated_cv_plan_count)
             write(output_unit, *) '-> Dry-run passed successfully! All configuration files are present.'
 
             write(output_unit, *) '-> Starting Execution Loop...'
@@ -1007,6 +1097,9 @@ subroutine run_workflow_driver()
             running = .false.
             write(output_unit, *) 'Exiting workflow driver.'
 
+        case (5)
+            call run_sh_product_rotation_invariance_test()
+
         case default
             write(output_unit, '(A,I0)') 'Invalid main option: ', main_choice
         end select
@@ -1014,15 +1107,43 @@ subroutine run_workflow_driver()
 end subroutine run_workflow_driver
 
 recursive subroutine validate_master_tree(master_filename, master_stack, depth, &
-    generated_selector_files, generated_selector_count)
+    generated_selector_files, generated_selector_count, generated_lifting_plan_files, &
+    generated_lifting_plan_count, generated_cv_plan_files, generated_cv_plan_count)
     use iso_fortran_env, only: error_unit
     use master_workflow_io_module, only: master_workflow_type, read_master_workflow, &
         validate_master_workflow, master_workflow_step_type_id, replicate_selector_workflow_step_type_id, &
-        euclidean_lifting_workflow_step_type_id
+        euclidean_lifting_workflow_step_type_id, centroid_distance_histogram_workflow_step_type_id, &
+        odf_sampling_workflow_step_type_id, healpix_lifting_workflow_step_type_id, &
+        histogram_sampling_workflow_step_type_id, sh_product_sampling_workflow_step_type_id, &
+        sh_invariant_contraction_workflow_step_type_id, te_plot_workflow_step_type_id, &
+        active_pair_filter_workflow_step_type_id
     use replicate_selector_workflow_module, only: replicate_selector_workflow_type, &
         read_replicate_selector_workflow, validate_replicate_selector_workflow
     use euclidean_lifting_workflow_io_module, only: read_euclidean_lifting_workflow, &
         validate_euclidean_lifting_workflow
+    use centroid_distance_histogram_workflow_module, only: centroid_distance_histogram_workflow_type, &
+        read_centroid_distance_histogram_workflow, validate_centroid_distance_histogram_workflow
+    use cv_plan_workflow_io_module, only: read_cv_plan_workflow, &
+        validate_cv_plan_workflow
+    use odf_sampling_workflow_module, only: odf_sampling_workflow_type, read_odf_sampling_workflow, &
+        validate_odf_sampling_workflow
+    use healpix_lifting_workflow_module, only: healpix_lifting_workflow_type, &
+        read_healpix_lifting_workflow, validate_healpix_lifting_workflow
+    use histogram_sampling_workflow_module, only: histogram_sampling_workflow_type, &
+        read_histogram_sampling_workflow, validate_histogram_sampling_workflow, &
+        check_histogram_sampling_inputs
+    use sh_product_sampling_workflow_module, only: sh_product_sampling_workflow_type, &
+        read_sh_product_sampling_workflow, validate_sh_product_sampling_workflow, &
+        check_sh_product_sampling_inputs
+    use sh_invariant_contraction_workflow_module, only: sh_invariant_contraction_workflow_type, &
+        read_sh_invariant_contraction_workflow, validate_sh_invariant_contraction_workflow, &
+        check_sh_invariant_contraction_inputs
+    use te_plot_workflow_module, only: te_plot_workflow_type, read_te_plot_workflow, &
+        validate_te_plot_workflow, check_te_plot_workflow_inputs
+    use active_pair_filter_workflow_module, only: active_pair_filter_workflow_type, &
+        read_active_pair_filter_workflow, validate_active_pair_filter_workflow, &
+        check_active_pair_filter_workflow_inputs
+    use workflow_module, only: cv_plan_workflow_type
     implicit none
 
     character(len=*), intent(in) :: master_filename
@@ -1030,10 +1151,15 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
     integer, intent(in) :: depth
     character(len=1024), intent(inout) :: generated_selector_files(:)
     integer, intent(inout) :: generated_selector_count
+    character(len=1024), intent(inout) :: generated_lifting_plan_files(:)
+    integer, intent(inout) :: generated_lifting_plan_count
+    character(len=1024), intent(inout) :: generated_cv_plan_files(:)
+    integer, intent(inout) :: generated_cv_plan_count
 
     type(master_workflow_type) :: master
     character(len=1024) :: current_master, step_config, next_master_stack(size(master_stack))
-    character(len=1024) :: selector_output
+    character(len=1024) :: selector_output, lifting_plan_output
+    character(len=1024) :: cv_plan_file, odf_lifting_plan_file, cv_plan_output
     integer :: i, generated_index
     logical :: file_exists, selector_will_be_generated
 
@@ -1061,7 +1187,7 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
 
     do i = 1, master%n_steps
         if (master%steps(i)%step_type < 1 .or. &
-            master%steps(i)%step_type > euclidean_lifting_workflow_step_type_id) then
+            master%steps(i)%step_type > active_pair_filter_workflow_step_type_id) then
             write(error_unit, '(A,I0,A,A)') 'ERROR: Unknown workflow step type ', &
                 master%steps(i)%step_type, ' in ', trim(current_master)
             error stop 'Unknown workflow step type.'
@@ -1077,7 +1203,31 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
 
         if (master%steps(i)%step_type == master_workflow_step_type_id) then
             call validate_master_tree(trim(step_config), next_master_stack, depth + 1, &
-                generated_selector_files, generated_selector_count)
+                generated_selector_files, generated_selector_count, generated_lifting_plan_files, &
+                generated_lifting_plan_count, generated_cv_plan_files, generated_cv_plan_count)
+        else if (master%steps(i)%step_type == 4) then
+            block
+                type(cv_plan_workflow_type) :: cv_job
+
+                call read_cv_plan_workflow(cv_job, trim(step_config))
+                call validate_cv_plan_workflow(cv_job)
+                if (cv_job%read_existing_cv_plan) then
+                    cv_plan_file = resolve_master_step_path(step_config, &
+                        trim(cv_job%existing_cv_plan_filename))
+                    inquire(file=trim(cv_plan_file), exist=file_exists)
+                    if (.not. file_exists) then
+                        write(error_unit, '(A,A)') 'ERROR: Existing CV plan file not found: ', trim(cv_plan_file)
+                        error stop 'Dry-run failed due to missing existing CV plan file.'
+                    end if
+                else
+                    cv_plan_output = resolve_master_step_path(step_config, trim(cv_job%cv_plan_filename))
+                    if (generated_cv_plan_count >= size(generated_cv_plan_files)) then
+                        error stop 'Too many CV plan outputs in master workflow.'
+                    end if
+                    generated_cv_plan_count = generated_cv_plan_count + 1
+                    generated_cv_plan_files(generated_cv_plan_count) = cv_plan_output
+                end if
+            end block
         else if (master%steps(i)%step_type == replicate_selector_workflow_step_type_id) then
             block
                 type(replicate_selector_workflow_type) :: selector_job
@@ -1120,6 +1270,259 @@ recursive subroutine validate_master_tree(master_filename, master_stack, depth, 
                         write(error_unit, '(A,A)') 'ERROR: Replicate selector file not found: ', trim(data_file)
                         error stop 'Dry-run failed due to missing replicate selector file.'
                     end if
+                    lifting_plan_output = resolve_master_step_path(step_config, &
+                        trim(lifting_job%io_params%lifting_plan_filename))
+                    if (generated_lifting_plan_count >= size(generated_lifting_plan_files)) then
+                        error stop 'Too many lifting plan outputs in master workflow.'
+                    end if
+                    generated_lifting_plan_count = generated_lifting_plan_count + 1
+                    generated_lifting_plan_files(generated_lifting_plan_count) = lifting_plan_output
+                end if
+            end block
+        else if (master%steps(i)%step_type == centroid_distance_histogram_workflow_step_type_id) then
+            block
+                type(centroid_distance_histogram_workflow_type) :: histogram_job
+                character(len=1024) :: plan_file
+                logical :: plan_exists, plan_will_be_generated
+
+                call read_centroid_distance_histogram_workflow(trim(step_config), histogram_job)
+                call validate_centroid_distance_histogram_workflow(histogram_job)
+                plan_file = resolve_master_step_path(step_config, &
+                    trim(histogram_job%lifting_plan_filename))
+                inquire(file=trim(plan_file), exist=plan_exists)
+                plan_will_be_generated = .false.
+                do generated_index = 1, generated_lifting_plan_count
+                    if (trim(generated_lifting_plan_files(generated_index)) == trim(plan_file)) then
+                        plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. plan_exists .and. .not. plan_will_be_generated) then
+                    write(error_unit, '(A,A)') 'ERROR: Lifting plan file not found: ', trim(plan_file)
+                    error stop 'Dry-run failed due to missing lifting plan file.'
+                end if
+            end block
+        else if (master%steps(i)%step_type == odf_sampling_workflow_step_type_id) then
+            block
+                type(odf_sampling_workflow_type) :: odf_job
+                integer :: generated_index
+                logical :: input_exists, plan_will_be_generated, cv_plan_will_be_generated
+
+                call read_odf_sampling_workflow(trim(step_config), odf_job)
+                call validate_odf_sampling_workflow(odf_job)
+                cv_plan_file = resolve_master_step_path(step_config, &
+                    trim(odf_job%io_params%cv_plan_filename))
+                inquire(file=trim(cv_plan_file), exist=input_exists)
+                cv_plan_will_be_generated = .false.
+                do generated_index = 1, generated_cv_plan_count
+                    if (trim(generated_cv_plan_files(generated_index)) == trim(cv_plan_file)) then
+                        cv_plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. input_exists .and. .not. cv_plan_will_be_generated) then
+                    write(error_unit,'(A,A)') 'ERROR: CV plan file not found: ', trim(cv_plan_file)
+                    error stop 'Dry-run failed due to missing CV plan file.'
+                end if
+                odf_lifting_plan_file = resolve_master_step_path(step_config, &
+                    trim(odf_job%io_params%lifting_plan_filename))
+                inquire(file=trim(odf_lifting_plan_file), exist=input_exists)
+                plan_will_be_generated = .false.
+                do generated_index = 1, generated_lifting_plan_count
+                    if (trim(generated_lifting_plan_files(generated_index)) == &
+                        trim(odf_lifting_plan_file)) then
+                        plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. input_exists .and. .not. plan_will_be_generated) then
+                    write(error_unit,'(A,A)') 'ERROR: Lifting plan file not found: ', trim(odf_lifting_plan_file)
+                    error stop 'Dry-run failed due to missing lifting plan file.'
+                end if
+            end block
+        else if (master%steps(i)%step_type == healpix_lifting_workflow_step_type_id) then
+            block
+                type(healpix_lifting_workflow_type) :: healpix_job
+                character(len=1024) :: plan_file
+                integer :: generated_index
+                logical :: plan_exists, plan_will_be_generated
+
+                call read_healpix_lifting_workflow(trim(step_config), healpix_job)
+                call validate_healpix_lifting_workflow(healpix_job)
+                plan_file = resolve_master_step_path(step_config, &
+                    trim(healpix_job%io_params%lifting_plan_filename))
+                inquire(file=trim(plan_file), exist=plan_exists)
+                plan_will_be_generated = .false.
+                do generated_index = 1, generated_lifting_plan_count
+                    if (trim(generated_lifting_plan_files(generated_index)) == trim(plan_file)) then
+                        plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. plan_exists .and. .not. plan_will_be_generated) then
+                    write(error_unit,'(A,A)') 'ERROR: Lifting plan file not found: ', trim(plan_file)
+                    error stop 'Dry-run failed due to missing lifting plan file.'
+                end if
+            end block
+        else if (master%steps(i)%step_type == histogram_sampling_workflow_step_type_id) then
+            block
+                type(histogram_sampling_workflow_type) :: histogram_job
+                character(len=1024) :: data_file
+                integer :: generated_index
+                logical :: cv_exists, cv_will_be_generated, plan_exists, plan_will_be_generated
+
+                call read_histogram_sampling_workflow(trim(step_config), histogram_job)
+                call validate_histogram_sampling_workflow(histogram_job)
+                data_file = resolve_master_step_path(step_config, &
+                    trim(histogram_job%io_params%cv_plan_filename))
+                inquire(file=trim(data_file), exist=cv_exists)
+                cv_will_be_generated = .false.
+                do generated_index = 1, generated_cv_plan_count
+                    if (trim(generated_cv_plan_files(generated_index)) == trim(data_file)) then
+                        cv_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. cv_exists .and. .not. cv_will_be_generated) then
+                    write(error_unit,'(A,A)') 'CV plan file not found: ', trim(data_file)
+                    error stop 'Histogram sampling dry-run failed'
+                end if
+
+                data_file = resolve_master_step_path(step_config, &
+                    trim(histogram_job%io_params%lifting_plan_filename))
+                inquire(file=trim(data_file), exist=plan_exists)
+                plan_will_be_generated = .false.
+                do generated_index = 1, generated_lifting_plan_count
+                    if (trim(generated_lifting_plan_files(generated_index)) == trim(data_file)) then
+                        plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                if (.not. plan_exists .and. .not. plan_will_be_generated) then
+                    write(error_unit,'(A,A)') 'Lifting plan file not found: ', trim(data_file)
+                    error stop 'Histogram sampling dry-run failed'
+                end if
+
+                histogram_job%io_params%pair_active_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%pair_active_filename))
+                histogram_job%io_params%odf_path = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%odf_path))
+                data_file = resolve_master_step_path(step_config, &
+                    trim(histogram_job%io_params%lifting_plan_filename))
+                call check_histogram_sampling_inputs(histogram_job, &
+                    resolve_master_step_path(step_config, trim(histogram_job%io_params%cv_plan_filename)), &
+                    data_file, cv_will_be_generated, plan_will_be_generated)
+            end block
+        else if (master%steps(i)%step_type == sh_product_sampling_workflow_step_type_id) then
+            block
+                type(sh_product_sampling_workflow_type) :: sh_job
+                character(len=1024) :: data_file
+                integer :: generated_index
+                logical :: selector_will_be_generated, plan_will_be_generated
+
+                call read_sh_product_sampling_workflow(trim(step_config), sh_job)
+                call validate_sh_product_sampling_workflow(sh_job)
+                data_file = resolve_master_step_path(step_config, trim(sh_job%selector_filename))
+                selector_will_be_generated = .false.
+                do generated_index = 1, generated_selector_count
+                    if (trim(generated_selector_files(generated_index)) == trim(data_file)) then
+                        selector_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                data_file = resolve_master_step_path(step_config, trim(sh_job%lifting_plan_filename))
+                plan_will_be_generated = .false.
+                do generated_index = 1, generated_lifting_plan_count
+                    if (trim(generated_lifting_plan_files(generated_index)) == trim(data_file)) then
+                        plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                sh_job%selector_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%selector_filename))
+                sh_job%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%lifting_plan_filename))
+                sh_job%pair_active_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%pair_active_filename))
+                sh_job%trajectory_path = resolve_master_step_path(step_config, trim(sh_job%trajectory_path))
+                call check_sh_product_sampling_inputs(sh_job, selector_will_be_generated, &
+                    plan_will_be_generated)
+            end block
+        else if (master%steps(i)%step_type == sh_invariant_contraction_workflow_step_type_id) then
+            block
+                type(sh_invariant_contraction_workflow_type) :: contraction_job
+                call read_sh_invariant_contraction_workflow(trim(step_config), contraction_job)
+                call validate_sh_invariant_contraction_workflow(contraction_job)
+                contraction_job%means_filename = resolve_master_step_path( &
+                    step_config, trim(contraction_job%means_filename))
+                contraction_job%output_path = resolve_master_step_path( &
+                    step_config, trim(contraction_job%output_path))
+                call check_sh_invariant_contraction_inputs(contraction_job)
+            end block
+        else if (master%steps(i)%step_type == te_plot_workflow_step_type_id) then
+            block
+                type(te_plot_workflow_type) :: te_job
+                logical :: cv_plan_will_be_generated
+
+                cv_plan_will_be_generated = .false.
+                call read_te_plot_workflow(trim(step_config), te_job)
+                call validate_te_plot_workflow(te_job)
+                te_job%raw_matrix_filename = resolve_master_step_path( &
+                    step_config, trim(te_job%raw_matrix_filename))
+                do generated_index = 1, te_job%n_shuffle_files
+                    te_job%shuffle_filenames(generated_index) = resolve_master_step_path( &
+                        step_config, trim(te_job%shuffle_filenames(generated_index)))
+                end do
+                if (te_job%write_summary) then
+                    te_job%summary_filename = resolve_master_step_path( &
+                        step_config, trim(te_job%summary_filename))
+                end if
+                if (te_job%write_pdb) then
+                    cv_plan_file = resolve_master_step_path(step_config,trim(te_job%cv_plan_filename))
+                    te_job%cv_plan_filename = cv_plan_file
+                    te_job%pdb_filename = resolve_master_step_path(step_config,trim(te_job%pdb_filename))
+                    do generated_index = 1, generated_cv_plan_count
+                        if (trim(generated_cv_plan_files(generated_index)) == trim(cv_plan_file)) then
+                            cv_plan_will_be_generated = .true.
+                            exit
+                        end if
+                    end do
+                end if
+                call check_te_plot_workflow_inputs(te_job,cv_plan_will_be_generated)
+            end block
+        else if (master%steps(i)%step_type == active_pair_filter_workflow_step_type_id) then
+            block
+                type(active_pair_filter_workflow_type) :: filter_job
+                integer :: n_possible_pairs
+                logical :: cv_plan_will_be_generated
+
+                call read_active_pair_filter_workflow(trim(step_config),filter_job)
+                call validate_active_pair_filter_workflow(filter_job)
+                filter_job%matrix_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%matrix_filename))
+                filter_job%cv_plan_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%cv_plan_filename))
+                filter_job%active_pair_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%active_pair_filename))
+                if (filter_job%n_random_pairs > 0) then
+                    filter_job%random_pair_indices_filename = resolve_master_step_path( &
+                        step_config,trim(filter_job%random_pair_indices_filename))
+                end if
+                cv_plan_will_be_generated = .false.
+                do generated_index = 1, generated_cv_plan_count
+                    if (trim(generated_cv_plan_files(generated_index)) == &
+                        trim(filter_job%cv_plan_filename)) then
+                        cv_plan_will_be_generated = .true.
+                        exit
+                    end if
+                end do
+                n_possible_pairs = check_active_pair_filter_workflow_inputs( &
+                    filter_job,cv_plan_will_be_generated)
+                if (filter_job%n_pairs + filter_job%n_random_pairs > n_possible_pairs) then
+                    write(error_unit,'(A,I0,A,I0,A,I0)') 'Active-pair workflow requests ', &
+                        filter_job%n_pairs,' ranked plus ',filter_job%n_random_pairs, &
+                        ' random pairs, but only ',n_possible_pairs,' are available'
+                    error stop 'Active-pair filter dry-run failed'
                 end if
             end block
         end if
@@ -1130,7 +1533,11 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
     use iso_fortran_env, only: output_unit, error_unit
     use master_workflow_io_module, only: master_workflow_type, read_master_workflow, &
         validate_master_workflow, master_workflow_step_type_id, replicate_selector_workflow_step_type_id, &
-        euclidean_lifting_workflow_step_type_id
+        euclidean_lifting_workflow_step_type_id, centroid_distance_histogram_workflow_step_type_id, &
+        odf_sampling_workflow_step_type_id, healpix_lifting_workflow_step_type_id, &
+        histogram_sampling_workflow_step_type_id, sh_product_sampling_workflow_step_type_id, &
+        sh_invariant_contraction_workflow_step_type_id, te_plot_workflow_step_type_id, &
+        active_pair_filter_workflow_step_type_id
     use random_seed_workflow_module, only: random_seed_workflow_type, read_seed_workflow, run_seed_workflow
     use trajectory_workflow_io_module, only: trajectory_workflow_type, read_trajectory_workflow, &
         run_trajectory_workflow
@@ -1139,6 +1546,24 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
         read_replicate_selector_workflow, validate_replicate_selector_workflow, &
         run_replicate_selector_workflow
     use replicate_selector_workflow_module, only: replica_selector_type
+    use odf_sampling_workflow_module, only: odf_sampling_workflow_type, read_odf_sampling_workflow, &
+        validate_odf_sampling_workflow, run_odf_sampling_workflow
+    use healpix_lifting_workflow_module, only: healpix_lifting_workflow_type, &
+        read_healpix_lifting_workflow, validate_healpix_lifting_workflow, run_healpix_lifting_workflow
+    use histogram_sampling_workflow_module, only: histogram_sampling_workflow_type, &
+        read_histogram_sampling_workflow, validate_histogram_sampling_workflow, &
+        run_histogram_sampling_workflow
+    use sh_product_sampling_workflow_module, only: sh_product_sampling_workflow_type, &
+        read_sh_product_sampling_workflow, validate_sh_product_sampling_workflow, &
+        run_sh_product_sampling_workflow
+    use sh_invariant_contraction_workflow_module, only: sh_invariant_contraction_workflow_type, &
+        read_sh_invariant_contraction_workflow, validate_sh_invariant_contraction_workflow, &
+        run_sh_invariant_contraction_workflow
+    use te_plot_workflow_module, only: te_plot_workflow_type, read_te_plot_workflow, &
+        validate_te_plot_workflow, run_te_plot_workflow
+    use active_pair_filter_workflow_module, only: active_pair_filter_workflow_type, &
+        read_active_pair_filter_workflow, validate_active_pair_filter_workflow, &
+        run_active_pair_filter_workflow
     implicit none
 
     character(len=*), intent(in) :: master_filename
@@ -1199,6 +1624,13 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
                 type(cv_plan_workflow_type) :: cv_plan_job
                 type(cv_plan) :: generated_plan
                 call read_cv_plan_workflow(cv_plan_job, trim(step_config))
+                if (cv_plan_job%read_existing_cv_plan) then
+                    cv_plan_job%existing_cv_plan_filename = resolve_master_step_path( &
+                        step_config, trim(cv_plan_job%existing_cv_plan_filename))
+                else
+                    cv_plan_job%cv_plan_filename = resolve_master_step_path( &
+                        step_config, trim(cv_plan_job%cv_plan_filename))
+                end if
                 call run_cv_plan_workflow(cv_plan_job, generated_plan)
                 write(output_unit, *) '-> CV Plan successfully generated from workflow.'
             end block
@@ -1240,6 +1672,142 @@ recursive subroutine execute_master_tree(master_filename, master_stack, depth)
                 lifting_job%io_params%lifting_plan_filename = resolve_master_step_path( &
                     step_config, trim(lifting_job%io_params%lifting_plan_filename))
                 call run_euclidean_lifting_workflow(lifting_job, project, topologies)
+            end block
+
+        case (centroid_distance_histogram_workflow_step_type_id)
+            block
+                type(centroid_distance_histogram_workflow_type) :: histogram_job
+                call read_centroid_distance_histogram_workflow(trim(step_config), histogram_job)
+                call validate_centroid_distance_histogram_workflow(histogram_job)
+                histogram_job%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%lifting_plan_filename))
+                histogram_job%centroid_path = resolve_master_step_path( &
+                    step_config, trim(histogram_job%centroid_path))
+                histogram_job%histogram_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%histogram_filename))
+                call run_centroid_distance_histogram_workflow(histogram_job)
+            end block
+
+        case (odf_sampling_workflow_step_type_id)
+            block
+                type(odf_sampling_workflow_type) :: odf_job
+                call read_odf_sampling_workflow(trim(step_config), odf_job)
+                call validate_odf_sampling_workflow(odf_job)
+                odf_job%io_params%cv_plan_filename = resolve_master_step_path( &
+                    step_config, trim(odf_job%io_params%cv_plan_filename))
+                odf_job%io_params%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(odf_job%io_params%lifting_plan_filename))
+                odf_job%io_params%trajectory_path = resolve_master_step_path( &
+                    step_config, trim(odf_job%io_params%trajectory_path))
+                odf_job%io_params%odf_path = resolve_master_step_path( &
+                    step_config, trim(odf_job%io_params%odf_path))
+                call run_odf_sampling_workflow(odf_job)
+            end block
+
+        case (healpix_lifting_workflow_step_type_id)
+            block
+                type(healpix_lifting_workflow_type) :: healpix_job
+                call read_healpix_lifting_workflow(trim(step_config), healpix_job)
+                call validate_healpix_lifting_workflow(healpix_job)
+                healpix_job%io_params%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(healpix_job%io_params%lifting_plan_filename))
+                healpix_job%io_params%trajectory_path = resolve_master_step_path( &
+                    step_config, trim(healpix_job%io_params%trajectory_path))
+                healpix_job%io_params%lifted_path = resolve_master_step_path( &
+                    step_config, trim(healpix_job%io_params%lifted_path))
+                call run_healpix_lifting_workflow(healpix_job)
+            end block
+
+        case (histogram_sampling_workflow_step_type_id)
+            block
+                type(histogram_sampling_workflow_type) :: histogram_job
+                call read_histogram_sampling_workflow(trim(step_config), histogram_job)
+                call validate_histogram_sampling_workflow(histogram_job)
+                histogram_job%io_params%cv_plan_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%cv_plan_filename))
+                histogram_job%io_params%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%lifting_plan_filename))
+                histogram_job%io_params%pair_active_filename = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%pair_active_filename))
+                histogram_job%io_params%odf_path = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%odf_path))
+                histogram_job%io_params%lifted_trajectory_path = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%lifted_trajectory_path))
+                histogram_job%io_params%histogram_path = resolve_master_step_path( &
+                    step_config, trim(histogram_job%io_params%histogram_path))
+                call run_histogram_sampling_workflow(histogram_job)
+            end block
+
+        case (sh_product_sampling_workflow_step_type_id)
+            block
+                type(sh_product_sampling_workflow_type) :: sh_job
+                call read_sh_product_sampling_workflow(trim(step_config), sh_job)
+                call validate_sh_product_sampling_workflow(sh_job)
+                sh_job%selector_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%selector_filename))
+                sh_job%lifting_plan_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%lifting_plan_filename))
+                sh_job%pair_active_filename = resolve_master_step_path( &
+                    step_config, trim(sh_job%pair_active_filename))
+                sh_job%trajectory_path = resolve_master_step_path( &
+                    step_config, trim(sh_job%trajectory_path))
+                sh_job%output_path = resolve_master_step_path(step_config, trim(sh_job%output_path))
+                call run_sh_product_sampling_workflow(sh_job)
+            end block
+
+        case (sh_invariant_contraction_workflow_step_type_id)
+            block
+                type(sh_invariant_contraction_workflow_type) :: contraction_job
+                call read_sh_invariant_contraction_workflow(trim(step_config), contraction_job)
+                call validate_sh_invariant_contraction_workflow(contraction_job)
+                contraction_job%means_filename = resolve_master_step_path( &
+                    step_config, trim(contraction_job%means_filename))
+                contraction_job%output_path = resolve_master_step_path( &
+                    step_config, trim(contraction_job%output_path))
+                call run_sh_invariant_contraction_workflow(contraction_job)
+            end block
+
+        case (te_plot_workflow_step_type_id)
+            block
+                type(te_plot_workflow_type) :: te_job
+                integer :: shuffle_index
+                call read_te_plot_workflow(trim(step_config), te_job)
+                call validate_te_plot_workflow(te_job)
+                te_job%raw_matrix_filename = resolve_master_step_path( &
+                    step_config, trim(te_job%raw_matrix_filename))
+                do shuffle_index = 1, te_job%n_shuffle_files
+                    te_job%shuffle_filenames(shuffle_index) = resolve_master_step_path( &
+                        step_config, trim(te_job%shuffle_filenames(shuffle_index)))
+                end do
+                if (te_job%write_summary) then
+                    te_job%summary_filename = resolve_master_step_path( &
+                        step_config, trim(te_job%summary_filename))
+                end if
+                if (te_job%write_pdb) then
+                    te_job%cv_plan_filename = resolve_master_step_path( &
+                        step_config, trim(te_job%cv_plan_filename))
+                    te_job%pdb_filename = resolve_master_step_path( &
+                        step_config, trim(te_job%pdb_filename))
+                end if
+                call run_te_plot_workflow(te_job, project, topologies)
+            end block
+
+        case (active_pair_filter_workflow_step_type_id)
+            block
+                type(active_pair_filter_workflow_type) :: filter_job
+                call read_active_pair_filter_workflow(trim(step_config),filter_job)
+                call validate_active_pair_filter_workflow(filter_job)
+                filter_job%matrix_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%matrix_filename))
+                filter_job%cv_plan_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%cv_plan_filename))
+                filter_job%active_pair_filename = resolve_master_step_path( &
+                    step_config,trim(filter_job%active_pair_filename))
+                if (filter_job%n_random_pairs > 0) then
+                    filter_job%random_pair_indices_filename = resolve_master_step_path( &
+                        step_config,trim(filter_job%random_pair_indices_filename))
+                end if
+                call run_active_pair_filter_workflow(filter_job)
             end block
 
         case (master_workflow_step_type_id)

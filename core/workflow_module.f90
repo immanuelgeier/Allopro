@@ -13,6 +13,17 @@ character(len=40), parameter :: graphical_representation_workflow_config_stem = 
     'graphical_representation_workflow'
 character(len=40), parameter :: master_workflow_config_stem = 'master_workflow'
 character(len=40), parameter :: euclidean_lifting_workflow_config_stem = 'euclidean_lifting_workflow'
+character(len=40), parameter :: centroid_distance_histogram_workflow_config_stem = &
+    'centroid_distance_histogram_workflow'
+character(len=40), parameter :: odf_sampling_workflow_config_stem = 'odf_sampling_workflow'
+character(len=40), parameter :: healpix_lifting_workflow_config_stem = 'healpix_lifting_workflow'
+character(len=40), parameter :: histogram_sampling_workflow_config_stem = 'histogram_sampling_workflow'
+character(len=40), parameter :: sh_product_sampling_workflow_config_stem = 'sh_product_sampling_workflow'
+character(len=40), parameter :: sh_invariant_contraction_workflow_config_stem = &
+    'sh_invariant_contraction_workflow'
+character(len=40), parameter :: te_plot_workflow_config_stem = 'te_plot_workflow'
+character(len=40), parameter :: active_pair_filter_workflow_config_stem = 'active_pair_filter_workflow'
+character(len=40), parameter :: c2_te_matrix_workflow_config_stem = 'c2_te_matrix_workflow'
 character(len=*), parameter :: preedited_library_prefix = 'pre_'
 
 type :: project_workflow_type
@@ -205,6 +216,170 @@ end type
         type(odf_run_params_type)   :: run_params
         type(odf_io_params_type)    :: io_params
     end type odf_workflow_type
+
+    type :: odf_sampling_model_params_type
+        integer :: state = 1
+        integer :: max_lag = 20
+        integer :: basis_index = 9
+        integer :: nlevel = 6
+        real(8) :: tau_mem = 100.0_8
+        real(8) :: dt = 1.0_8
+    end type odf_sampling_model_params_type
+
+    type :: odf_sampling_io_params_type
+        character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+        character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
+        character(len=1024) :: trajectory_path = '.'
+        character(len=256) :: trajectory_prefix = 'vec_tra'
+        character(len=1024) :: odf_path = '.'
+        character(len=256) :: odf_prefix = 'odf_'
+        character(len=16) :: output_policy = 'ask'
+    end type odf_sampling_io_params_type
+
+    type :: odf_sampling_workflow_type
+        type(odf_sampling_model_params_type) :: model_params
+        type(odf_sampling_io_params_type) :: io_params
+    end type odf_sampling_workflow_type
+
+    type :: healpix_lifting_model_params_type
+        integer :: state = 1
+        integer :: npix = 12288
+        integer :: lag = 20
+        integer :: basis_index = 9
+        real(8) :: tau_mem = 100.0_8
+        real(8) :: dt = 1.0_8
+    end type healpix_lifting_model_params_type
+
+    type :: healpix_lifting_io_params_type
+        character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
+        character(len=1024) :: trajectory_path = '.'
+        character(len=256) :: trajectory_prefix = 'vec_tra'
+        character(len=1024) :: lifted_path = '.'
+        character(len=256) :: lifted_prefix = 'healpix_trajectory'
+        character(len=16) :: output_policy = 'ask'
+    end type healpix_lifting_io_params_type
+
+    type :: healpix_lifting_workflow_type
+        type(healpix_lifting_model_params_type) :: model_params
+        type(healpix_lifting_io_params_type) :: io_params
+    end type healpix_lifting_workflow_type
+
+    type :: histogram_sampling_model_params_type
+        integer :: state = 1
+        integer :: lag = 10
+        integer :: basis_index = 9
+        integer :: nlevel_target = 4
+        integer :: odf_max_lag = 20
+        integer :: odf_basis_index = 9
+        integer :: odf_nlevel = 6
+        integer :: max_chunk_size = 2*10**8
+        integer :: nrun_shuffle = 1
+        integer :: block_size_shuffle = 10000
+        real(8) :: tau_mem = 100.0_8
+        real(8) :: dt = 1.0_8
+        real(8) :: max_ram_gb = 8.0_8
+        logical :: block_shuffle = .false.
+    end type histogram_sampling_model_params_type
+
+    type :: histogram_sampling_io_params_type
+        character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+        character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
+        character(len=1024) :: pair_active_filename = 'activ_pairs'
+        character(len=1024) :: lifted_trajectory_path = '.'
+        character(len=256) :: lifted_trajectory_prefix = 'healpix_trajectory'
+        character(len=1024) :: histogram_path = '.'
+        character(len=256) :: histogram_prefix = 'histogram'
+        character(len=1024) :: odf_path = '.'
+        character(len=256) :: odf_prefix = 'odf_'
+        character(len=16) :: histogram_output_policy = 'replace'
+    end type histogram_sampling_io_params_type
+
+    type :: histogram_sampling_workflow_type
+        type(histogram_sampling_model_params_type) :: model_params
+        type(histogram_sampling_io_params_type) :: io_params
+    end type histogram_sampling_workflow_type
+
+    type :: sh_product_sampling_workflow_type
+        integer :: lmax = 3
+        integer :: lag = 1
+        character(len=1024) :: selector_filename = 'replicate_selector.dat'
+        character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
+        character(len=1024) :: pair_active_filename = 'activ_pairs'
+        character(len=1024) :: trajectory_path = '.'
+        character(len=256) :: trajectory_prefix = 'vec_tra'
+        character(len=1024) :: output_path = '.'
+        character(len=256) :: output_prefix = 'sh_product_means'
+        character(len=16) :: output_policy = 'ask'
+    end type sh_product_sampling_workflow_type
+
+    type :: sh_invariant_contraction_workflow_type
+        character(len=1024) :: means_filename = 'sh_product_means.txt'
+        character(len=1024) :: output_path = '.'
+        character(len=256) :: output_prefix = 'sh_invariant'
+        character(len=16) :: contraction_mode = 'all'
+        integer :: n_selected_l_triplets = 0
+        integer, allocatable :: selected_l_triplets(:,:)
+        character(len=16) :: output_policy = 'ask'
+    end type sh_invariant_contraction_workflow_type
+
+    type :: te_plot_workflow_type
+        character(len=1024) :: raw_matrix_filename = 'te_matrix_raw.txt'
+        integer :: n_shuffle_files = 0
+        character(len=1024), allocatable :: shuffle_filenames(:)
+        logical :: write_summary = .true.
+        character(len=1024) :: summary_filename = 'te_sum_data.txt'
+        logical :: write_pdb = .false.
+        character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+        integer :: state_index = 1
+        integer :: replicate_index = 1
+        integer :: frame_index = 1
+        integer :: cv_target_offset = 9
+        real(8) :: pdb_scale = 10.0_8
+        real(8) :: pdb_threshold = 0.0_8
+        character(len=1024) :: pdb_filename = 'te_atoms_pdb.pdb'
+        character(len=16) :: output_policy = 'ask'
+    end type te_plot_workflow_type
+
+    type :: active_pair_filter_workflow_type
+        character(len=1024) :: matrix_filename = 'te_matrix.txt'
+        character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+        character(len=16) :: matrix_layout = 'two_per_object'
+        character(len=16) :: score_mode = 'sum'
+        character(len=16) :: selection = 'largest'
+        integer :: n_pairs = 100
+        integer :: n_random_pairs = 0
+        character(len=1024) :: active_pair_filename = 'activ_pairs'
+        character(len=1024) :: random_pair_indices_filename = 'random_active_pairs.txt'
+        character(len=16) :: output_policy = 'ask'
+    end type active_pair_filter_workflow_type
+
+    type :: c2_te_matrix_model_params_type
+        integer :: nlevel_target = 4
+        integer :: max_chunk_size = 2*10**8
+        integer :: odf_max_lag = 20
+        integer :: odf_basis_index = 9
+        integer :: odf_nlevel = 6
+        logical :: shuffled = .false.
+    end type c2_te_matrix_model_params_type
+
+    type :: c2_te_matrix_io_params_type
+        character(len=1024) :: cv_plan_filename = 'cv_plan.dat'
+        character(len=1024) :: lifting_plan_filename = 'lifting_plan.dat'
+        character(len=1024) :: pair_active_filename = 'activ_pairs'
+        character(len=1024) :: histogram_path = '.'
+        character(len=256) :: histogram_prefix = 'histogram'
+        character(len=1024) :: output_path = '.'
+        character(len=256) :: output_prefix = 'c2_te_'
+        character(len=1024) :: odf_path = '.'
+        character(len=256) :: odf_prefix = 'odf_'
+        character(len=16) :: output_policy = 'replace'
+    end type c2_te_matrix_io_params_type
+
+    type :: c2_te_matrix_workflow_type
+        type(c2_te_matrix_model_params_type) :: model_params
+        type(c2_te_matrix_io_params_type) :: io_params
+    end type c2_te_matrix_workflow_type
+
     
         type :: histogram_model_params_type
         integer :: nlevel_target = 4

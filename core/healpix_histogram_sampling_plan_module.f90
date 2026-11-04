@@ -657,8 +657,9 @@ end function npix_to_nside
     ! ===================================================================
 ! ===================================================================
 subroutine execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
-                                 npix, lag, lifted_prefix, output_prefix)
+                                 npix, lag, lifted_prefix, output_prefix, output_actions)
     use iso_fortran_env, only: real32, int32, int64
+    use output_policy_module, only: OUTPUT_WRITE
     !$ use omp_lib
     implicit none
 
@@ -670,6 +671,7 @@ subroutine execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
     integer,                 intent(in) :: lag
     character(len=*),        intent(in) :: lifted_prefix
     character(len=*),        intent(in) :: output_prefix
+    integer,                 intent(in), optional :: output_actions(:)
 
     type(lifted_tra_int) :: tra
     character(len=800)   :: lifted_file, chunk_out_file
@@ -836,6 +838,9 @@ subroutine execute_sampling_plan(plan, lifting_plan, hits, pair_map, &
             ichunk = plan%groups(igroup)%chunk_ids(idx_in_grp)
             group_offset = plan%groups(igroup)%chunk_offsets(idx_in_grp)
 
+            if (present(output_actions)) then
+                if (output_actions(ichunk) /= OUTPUT_WRITE) cycle
+            end if
             call make_te_chunk_filename(output_prefix, ichunk, chunk_out_file)
             open(newunit=u_out, file=trim(chunk_out_file), access='stream', &
                  form='unformatted', status='replace')
@@ -879,9 +884,10 @@ end subroutine execute_sampling_plan
     
 subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                                           npix, lag, shuffle_block_size, &
-                                          nshuffle, lifted_prefix, output_prefix)
+                                          nshuffle, lifted_prefix, output_prefix, output_actions)
 
     use iso_fortran_env, only: real32, int32, int64
+    use output_policy_module, only: OUTPUT_WRITE
     !$ use omp_lib
     implicit none
 
@@ -897,6 +903,7 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
 
     character(len=*), intent(in) :: lifted_prefix
     character(len=*), intent(in) :: output_prefix
+    integer, intent(in), optional :: output_actions(:)
 
     ! ============================================================
     ! Trajektorien-Daten
@@ -1587,6 +1594,11 @@ subroutine execute_shuffle_sampling_plan(plan, lifting_plan, hits, pair_map, &
                     ishuffle, &
                     ichunk, &
                     chunk_out_file)
+
+                if (present(output_actions)) then
+                    if (output_actions((ishuffle - 1) * size(plan%chunk2group) + ichunk) /= &
+                        OUTPUT_WRITE) cycle
+                end if
 
 
                 open(newunit=u_out, &

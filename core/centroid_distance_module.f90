@@ -28,12 +28,13 @@ contains
     !
     !===================================================================
 
-    subroutine run_centroid_distance_histogram(lifting_plan, prefix)
+    subroutine run_centroid_distance_histogram(lifting_plan, prefix, histogram_filename)
 
         implicit none
 
         type(lifting_plan_type), intent(in) :: lifting_plan
         character(len=*), intent(in) :: prefix
+        character(len=*), intent(in) :: histogram_filename
 
         integer, parameter :: nbins = 1000
 
@@ -45,8 +46,6 @@ contains
 
         integer(8), allocatable :: histogram(:,:)
         integer(8), allocatable :: nsamples(:)
-
-        character(len=800) :: filename
 
 
         !---------------------------------------------------------------
@@ -98,11 +97,8 @@ contains
         ! Genau EINE Datei für ALLE Paare
         !---------------------------------------------------------------
 
-        filename = trim(prefix)//'_distance_histogram.dat'
-
-
         call write_centroid_distance_histogram( &
-            filename, &
+            histogram_filename, &
             rmin, &
             rmax, &
             histogram, &
@@ -111,7 +107,7 @@ contains
 
 
         write(0,*) 'pair distance histograms written to ', &
-                   trim(filename)
+                   trim(histogram_filename)
 
 
         deallocate(histogram)
@@ -515,4 +511,3 @@ contains
 
 
 end module centroid_distance_histogram_module
-

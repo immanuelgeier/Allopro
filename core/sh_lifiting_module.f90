@@ -10,6 +10,7 @@ module sh_lifting_module
     public :: sh_lift_initialize
     public :: sh_lift_finalize
     public :: sh_lift_block
+    public :: sh_lift_vectors_block
     public :: sh_lm_index
 
     ! ============================================================
@@ -264,6 +265,32 @@ contains
         !$omp end parallel do
 
     end subroutine sh_lift_block
+
+    subroutine sh_lift_vectors_block(sh, vectors, Y_re, Y_im)
+        type(sh_lift_type), intent(in) :: sh
+        real(real64), intent(in) :: vectors(:,:,:)
+        real(real64), intent(out) :: Y_re(:,:,:)
+        real(real64), intent(out) :: Y_im(:,:,:)
+        integer :: channel, frame
+
+        if (size(vectors,1) /= 3) error stop 'SH: vectors must have shape (3,nchannel,nframe)'
+        if (size(Y_re,1) /= sh%nlm .or. size(Y_im,1) /= sh%nlm) then
+            error stop 'SH: wrong vector-block output dimensions'
+        end if
+        if (size(Y_re,2) /= size(vectors,2) .or. size(Y_im,2) /= size(vectors,2) .or. &
+            size(Y_re,3) /= size(vectors,3) .or. size(Y_im,3) /= size(vectors,3)) then
+            error stop 'SH: vector-block shape mismatch'
+        end if
+
+        !$omp parallel do collapse(2) schedule(static)
+        do frame = 1, size(vectors,3)
+            do channel = 1, size(vectors,2)
+                call sh_lift_single(sh, vectors(:,channel,frame), &
+                    Y_re(:,channel,frame), Y_im(:,channel,frame))
+            end do
+        end do
+        !$omp end parallel do
+    end subroutine sh_lift_vectors_block
 
 
     ! ============================================================

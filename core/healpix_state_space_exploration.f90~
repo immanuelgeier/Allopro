@@ -97,12 +97,13 @@ contains
 
 
 
-subroutine read_odf_lib(odf_lib)
+subroutine read_odf_lib(odf_lib,prefix_odf,path_odf)
 
     implicit none
 
     type(odf_lib_type), intent(inout) :: odf_lib
-
+    character(len=*), intent(in)       :: prefix_odf,path_odf
+ 
     integer :: iodf
     integer :: ipix
     integer :: iobj
@@ -126,7 +127,7 @@ subroutine read_odf_lib(odf_lib)
 
     do iodf = 1, odf_lib%n_odf
 
-        filename = trim(odf_lib%odf(iodf)%odf_name)//".txt"
+        filename = path_odf//prefix_odf//trim(odf_lib%odf(iodf)%odf_name)//".txt"
 
         write(0,*) 'Reading ODF: ', trim(filename)
 
@@ -289,25 +290,6 @@ subroutine read_odf_lib(odf_lib)
         end if
 
 
-        !=====================================================
-        ! Histogramm
-        !
-        ! Die vorhandene Schreib-Routine hat:
-        !
-        !   ipix = 1 ... npix
-        !
-        ! geschrieben.
-        !
-        ! Die interne Struktur ist:
-        !
-        !   hist(0:npix-1,nobj)
-        !
-        ! Daher:
-        !
-        !   erste Datei-Zeile  -> hist(0,:)
-        !   letzte Datei-Zeile -> hist(npix-1,:)
-        !=====================================================
-
         do ipix = 1, npix_file
 
             read(unit,*,iostat=ios) &
@@ -425,7 +407,7 @@ subroutine write_odf_analysis_text(odf_lib)
 
 end subroutine write_odf_analysis_text
 
-subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel, nobj,prefix_odf,path_odf)
+subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel, nobj)
 
     implicit none
 
@@ -439,7 +421,7 @@ subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel
 
     integer :: istate, ilag, iodf, ilevel, iobj
     integer :: npix, nside, lvl_nside, lvl_npix
-    character(len=*),intent(in) :: prefix_odf,path_odf
+   
 
     nside = 2**(nlevel-1)
     npix  = 12 * 4**(nlevel-1)
@@ -472,12 +454,13 @@ subroutine init_odf_lib(cv_p,odf_lib, lifting_plan, max_lag, basis_index, nlevel
         do ilag = 0, max_lag
             iodf = iodf + 1
 
-          write(odf_lib%odf(iodf)%odf_name, &
-    '(*(A), "state_", I4.4, "_lag_", I3.3)') &
-    trim(prefix_odf), "/", trim(path_odf), &
-    lifting_plan%istates(istate), ilag
-                
-                
+       write(odf_lib%odf(iodf)%odf_name, &
+    '("state_", I4.4, "_lag_", I3.3)') &
+    lifting_plan%istates(istate), &
+    ilag
+
+             !   write(0,*) odf_lib%odf(iodf)%odf_name
+             !stop   
                 
 
             odf_lib%odf(iodf)%state       = lifting_plan%istates(istate)
@@ -584,38 +567,162 @@ enddo
 
 end subroutine compute_odf_entropy
 
-subroutine write_odf_lib(odf_lib)
+subroutine write_odf_lib( &
+    odf_lib, &
+    prefix_odf, &
+    path_odf, &
+    output_policy)
 
-implicit none
+    use output_policy_module
 
-type(odf_lib_type),intent(in) :: odf_lib
+    implicit none
 
-integer :: iodf
-integer :: ipix
-integer :: unit
+    type(odf_lib_type), intent(in) :: odf_lib
 
-character(len=256) :: filename
+    character(len=*), intent(in) :: prefix_odf
+    character(len=*), intent(in) :: path_odf
+    character(len=*), intent(in) :: output_policy
 
-do iodf=1,odf_lib%n_odf
+    integer :: iodf
+    integer :: ipix
+    integer :: unit
+    integer :: output_action
 
-    filename=trim(odf_lib%odf(iodf)%odf_name)//".txt"
+    character(len=2048) :: effective_odf_prefix
+    character(len=2048) :: odf_filename
+    character(len=2048) :: odf_file
 
-    open(newunit=unit,file=filename,status="replace")
-    write(unit,*) "# nside ",odf_lib%odf(iodf)%nside
-    write(unit,*) "# npix  ",odf_lib%odf(iodf)%npix
-    write(unit,*) "# nobj  ",size(odf_lib%odf(iodf)%hist,2)
 
-    do ipix=1,odf_lib%odf(iodf)%npix
+    ! ------------------------------------------------------------
+    ! Determine effective output prefix
+    !
+    ! replace / ask -> prefix_odf
+    ! new            -> prefix_odf_new
+    !
+    ! Der Pfad bleibt unverändert.
+    ! ------------------------------------------------------------
 
-        write(unit,*) odf_lib%odf(iodf)%hist(ipix,:)
+    effective_odf_prefix = get_output_prefix( &
+        prefix_odf, &
+        output_policy)
 
-    enddo
 
-    close(unit)
+    ! ------------------------------------------------------------
+    ! Loop over all ODFs
+    ! ------------------------------------------------------------
 
-enddo
+    do iodf = 1, odf_lib%n_odf
 
-end subroutine
+
+        ! --------------------------------------------------------
+        ! Construct output filename
+        !
+        ! odf_name enthält den eigentlichen Dateinamen.
+        ! Der effektive Prefix wird davor gesetzt.
+        ! --------------------------------------------------------
+
+        odf_filename = &
+            trim(effective_odf_prefix) // &
+            trim(odf_lib%odf(iodf)%odf_name) // &
+            ".txt"
+
+        odf_file = &
+            trim(path_odf) // &
+            trim(odf_filename)
+
+
+        ! --------------------------------------------------------
+        ! Check output policy BEFORE writing
+        ! --------------------------------------------------------
+
+        call check_output_policy( &
+            odf_file, &
+            output_policy, &
+            output_action)
+
+
+        select case (output_action)
+
+        case (OUTPUT_SKIP)
+
+            write(0,*) 'Skipping ODF output:'
+            write(0,*) '  ', trim(odf_file)
+
+            cycle
+
+
+        case (OUTPUT_ABORT)
+
+            write(0,*) 'Aborting ODF output workflow.'
+            return
+
+
+        case (OUTPUT_WRITE)
+
+            write(0,*) 'Writing ODF:'
+            write(0,*) '  ', trim(odf_file)
+
+
+        case (OUTPUT_COMPUTE_ONLY)
+
+            write(0,*) 'Computing ODF output without writing:'
+            write(0,*) '  ', trim(odf_file)
+
+
+        case default
+
+            write(0,*) 'ERROR: Invalid output action.'
+            return
+
+        end select
+
+
+        ! --------------------------------------------------------
+        ! Write ODF
+        ! --------------------------------------------------------
+
+        if (output_action == OUTPUT_WRITE) then
+
+            open( &
+                newunit = unit, &
+                file    = trim(odf_file), &
+                status  = 'replace', &
+                action  = 'write')
+
+            write(unit,*) "# nside ", &
+                odf_lib%odf(iodf)%nside
+
+            write(unit,*) "# npix  ", &
+                odf_lib%odf(iodf)%npix
+
+            write(unit,*) "# nobj  ", &
+                size(odf_lib%odf(iodf)%hist, 2)
+
+
+            do ipix = 1, odf_lib%odf(iodf)%npix
+
+                write(unit,*) &
+                    odf_lib%odf(iodf)%hist(ipix,:)
+
+            end do
+
+
+            close(unit)
+
+            write(0,*) 'Written: ', trim(odf_file)
+
+
+        else if (output_action == OUTPUT_COMPUTE_ONLY) then
+
+            write(0,*) &
+                'Output skipped: ', trim(odf_file)
+
+        end if
+
+
+    end do
+
+end subroutine write_odf_lib
 
 subroutine write_entropy(odf_lib)
 
@@ -656,6 +763,8 @@ close(unit)
 end subroutine write_entropy
 
 
+
+
 subroutine sample_odfs_C2( &
     odf_lib, &
     lifting_plan, &
@@ -663,16 +772,15 @@ subroutine sample_odfs_C2( &
     path_tra, &
     basis_index, &
     tau_mem, &
-    dt,odf_name)
+    dt, prefix_odf,path_odf,output_policy)
 
     implicit none
 
     type(odf_lib_type), intent(inout) :: odf_lib
     type(lifting_plan_type), intent(in) :: lifting_plan
 
-    character(len=*), intent(in) :: prefix_tra
-    character(len=*), intent(in) :: path_tra
-
+    character(len=*), intent(in) :: prefix_tra,path_tra
+    character(len=*), intent(in) :: prefix_odf,path_odf,output_policy
     integer, intent(in) :: basis_index
 
     real(8), intent(in) :: tau_mem
@@ -680,7 +788,7 @@ subroutine sample_odfs_C2( &
 
     character(len=2048) :: filename
     character(len=2048) :: path_and_prefix
-    character(len=*) :: odf_name
+ 
     type(lifted_trajectory) :: raw_tra
 
     integer :: istate, irep, iblock
@@ -820,7 +928,7 @@ subroutine sample_odfs_C2( &
     write(0,*) 'final', length
 
 
-    call write_odf_lib(odf_lib)
+    call write_odf_lib(odf_lib,prefix_odf,path_odf,output_policy)
     call compute_odf_entropy_levels(odf_lib)
     call write_entropy(odf_lib)
     call write_odf_analysis_text(odf_lib)
@@ -831,108 +939,107 @@ end subroutine sample_odfs_C2
 
 
 
-subroutine sample_odfs_C2_old(odf_lib,lifting_plan,prefix_tra,path_tra)
-implicit none
-character(len=*),intent(in) ::prefix_tra,path_tra
-character(len=2048) ::filename,path_and_prefix
-
-type(odf_lib_type), intent(inout) :: odf_lib
-type(lifting_plan_type)  :: lifting_plan
-type(lifted_trajectory)  :: lifted_tra
-integer :: istate,irep,iblock
-real(8) :: rot(3,3),vec_local(3),vec(3)
-integer :: iodf,ipix,iobj,tlag
-integer :: nframe,t,basis_index
-real(8) :: length,lsq
-
-do istate=1,size(lifting_plan%istates)
-do irep=1,lifting_plan%nreps(istate)
-do iblock=1,lifting_plan%nblock(istate,irep)
-
-
-length=huge(length)
-path_and_prefix=path_tra//'/'//prefix_tra
-
-call make_filename_lifted_tra(istate,irep,iblock,path_and_prefix,filename)
-write(0,*) trim(filename),'in odf sampling'
-call read_trajectory(filename,lifted_tra)
-
-write(0,*) lifting_plan%start_block(istate,irep,iblock),lifting_plan%end_block(istate,irep,iblock)
-nframe = size(lifted_tra%vec,3)
-            ! alle ODFs dieses Datensatzes
-            	
-
-            !
-            do iodf=1,odf_lib%n_odf
-            basis_index= odf_lib%odf(iodf)%basis_index
-
-                if(odf_lib%odf(iodf)%state /= &
-                   lifting_plan%istates(istate)) cycle
-                do t=1,nframe
-                    tlag = t + odf_lib%odf(iodf)%lag
-                    if(tlag > nframe) cycle
-                    !
-                    ! Basis bei Referenzzeit t
-                    !
-                    call extract_backbone_basis( &
-                        odf_lib%odf(iodf)%basis_index, &
-                        lifted_tra,t,rot)
-                    do iobj=1,size(odf_lib%odf(iodf)%hist,2)
-                        !
-                        ! Orientierung bei t+lag
-                        !
-                        vec = lifted_tra%vec(:,iobj,tlag)
-                        lsq=norm2(vec)
-                        length=min(sqrt(lsq),length)
-                        vec =vec/norm2(vec)
-                        !
-                        ! in Basis von t
-                        !
-                        vec_local = matmul(rot,vec)
-                        call vec2pix_nest( &
-                            odf_lib%odf(iodf)%nside, &
-                            vec_local,ipix)
-                        
-                       
-                        odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
-                        odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
-
-                        
-                        !if(odf_lib%c2_symmetry(iobj)) then
-                        !vec_local=-vec_local
-                        !! write(0,*) ipix,'nonrot'
-                        !     call vec2pix_nest( &
-                        !    odf_lib%odf(iodf)%nside, &
-                        !    vec_local,ipix)
-                        ! !write(0,*) ipix ,'rot'
-                        ! !pause
-                        !
-                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
-                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
-                        !
-                        !end if
-                        !write(0,*)'shape', shape(lifted_tra%vec)
-                        !pause
-                    enddo
-                enddo
-            enddo
-           ! write(*,*) "block",iblock, &
-           !sum(odf_lib%odf(1)%hist)
-
-           	   !pause
-           	      write(0,*)'max length',length
-end do
-end do
-end do
-
-write(0,*) 'final',length
-
-call  write_odf_lib(odf_lib)
-call compute_odf_entropy_levels(odf_lib)
-call write_entropy(odf_lib)
-call write_odf_analysis_text(odf_lib)
-end subroutine sample_odfs_C2_old
-
+!subroutine sample_odfs_C2_old(odf_lib,lifting_plan,prefix_tra,path_tra)
+!implicit none
+!character(len=*),intent(in) ::prefix_tra,path_tra
+!character(len=2048) ::filename,path_and_prefix
+!
+!type(odf_lib_type), intent(inout) :: odf_lib
+!type(lifting_plan_type)  :: lifting_plan
+!type(lifted_trajectory)  :: lifted_tra
+!integer :: istate,irep,iblock
+!real(8) :: rot(3,3),vec_local(3),vec(3)
+!integer :: iodf,ipix,iobj,tlag
+!integer :: nframe,t,basis_index
+!real(8) :: length,lsq
+!
+!do istate=1,size(lifting_plan%istates)
+!do irep=1,lifting_plan%nreps(istate)
+!do iblock=1,lifting_plan%nblock(istate,irep)
+!
+!
+!length=huge(length)
+!path_and_prefix=path_tra//'/'//prefix_tra
+!
+!call make_filename_lifted_tra(istate,irep,iblock,path_and_prefix,filename)
+!write(0,*) trim(filename),'in odf sampling'
+!call read_trajectory(filename,lifted_tra)
+!
+!write(0,*) lifting_plan%start_block(istate,irep,iblock),lifting_plan%end_block(istate,irep,iblock)
+!nframe = size(lifted_tra%vec,3)
+!            ! alle ODFs dieses Datensatzes
+!            	
+!
+!            !
+!            do iodf=1,odf_lib%n_odf
+!            basis_index= odf_lib%odf(iodf)%basis_index
+!
+!                if(odf_lib%odf(iodf)%state /= &
+!                   lifting_plan%istates(istate)) cycle
+!                do t=1,nframe
+!                    tlag = t + odf_lib%odf(iodf)%lag
+!                    if(tlag > nframe) cycle
+!                    !
+!                    ! Basis bei Referenzzeit t
+!                    !
+!                    call extract_backbone_basis( &
+!                        odf_lib%odf(iodf)%basis_index, &
+!                        lifted_tra,t,rot)
+!                    do iobj=1,size(odf_lib%odf(iodf)%hist,2)
+!                        !
+!                        ! Orientierung bei t+lag
+!                        !
+!                        vec = lifted_tra%vec(:,iobj,tlag)
+!                        lsq=norm2(vec)
+!                        length=min(sqrt(lsq),length)
+!                        vec =vec/norm2(vec)
+!                        !
+!                        ! in Basis von t
+!                        !
+!                        vec_local = matmul(rot,vec)
+!                        call vec2pix_nest( &
+!                            odf_lib%odf(iodf)%nside, &
+!                            vec_local,ipix)
+!                        
+!                       
+!                        odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
+!                        odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
+!
+!                        
+!                        !if(odf_lib%c2_symmetry(iobj)) then
+!                        !vec_local=-vec_local
+!                        !! write(0,*) ipix,'nonrot'
+!                        !     call vec2pix_nest( &
+!                        !    odf_lib%odf(iodf)%nside, &
+!                        !    vec_local,ipix)
+!                        ! !write(0,*) ipix ,'rot'
+!                        ! !pause
+!                        !
+!                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)= &
+!                        !odf_lib%odf(iodf)%hist(ipix+1,iobj)+1
+!                        !
+!                        !end if
+!                        !write(0,*)'shape', shape(lifted_tra%vec)
+!                        !pause
+!                    enddo
+!                enddo
+!            enddo
+!           ! write(*,*) "block",iblock, &
+!           !sum(odf_lib%odf(1)%hist)
+!
+!           	   !pause
+!           	      write(0,*)'max length',length
+!end do
+!end do
+!end do
+!
+!write(0,*) 'final',length
+!
+!call  write_odf_lib(odf_lib)
+!call compute_odf_entropy_levels(odf_lib)
+!call write_entropy(odf_lib)
+!call write_odf_analysis_text(odf_lib)
+!end subroutine sample_odfs_C2_old
 
 
 subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
@@ -950,20 +1057,14 @@ subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
     real(8) :: v1(3), v2(3)
     real(8) :: A1(3,3), A2(3,3)
     real(8) :: P1(3,3), B2(3,3)
-
     real(8) :: e1(3), e2(3), e3(3)
     real(8) :: nrm
-
-    real(8) :: prev_e1(3), prev_e2(3)
 
 
     ! ============================================================
     ! Dimensions / parameters
     ! ============================================================
 
-    	
-   ! write(0,*) shape(lifted_tra%vec)
-   
     nframe = size(lifted_tra%vec,3)
 
     if (size(rots,1) /= 3 .or. size(rots,2) /= 3 .or. &
@@ -1006,13 +1107,263 @@ subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
 
 
         ! ========================================================
-        ! Instantaneous v1
+        ! Instantaneous structural direction v1
         ! ========================================================
 
         v1 = lifted_tra%vec(:,2*basis_index-1,t)
 
-        
-        
+        nrm = norm2(v1)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: |v1| too small"
+        end if
+
+        v1 = v1/nrm
+
+
+        ! ========================================================
+        ! Instantaneous structural direction v2
+        !
+        ! Orthogonalize against instantaneous v1.
+        ! ========================================================
+
+        v2 = lifted_tra%vec(:,2*basis_index,t)
+
+        nrm = norm2(v2)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: |v2| too small"
+        end if
+
+        v2 = v2/nrm
+
+        v2 = v2 - dot_product(v2,v1)*v1
+
+        nrm = norm2(v2)
+
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: v1 and v2 almost parallel"
+        end if
+
+        v2 = v2/nrm
+
+
+        ! ========================================================
+        ! Exponential tensor averages
+        ! ========================================================
+
+        call update_exponential_tensor(A1, v1, alpha)
+        call update_exponential_tensor(A2, v2, alpha)
+
+
+        ! ========================================================
+        ! First basis vector
+        !
+        ! e1 = principal eigenvector of A1
+        ! ========================================================
+
+        call principal_eigenvector_symmetric_3x3(A1, e1)
+
+        nrm = norm2(e1)
+
+        if (nrm <= 1.0e-14_8) then
+            error stop "build_smoothed_backbone_basis: e1 too small"
+        end if
+
+        e1 = e1/nrm
+
+
+        ! ========================================================
+        ! Orient e1 relative to the instantaneous structural v1
+        !
+        ! The eigenvector has an arbitrary sign. Since v1 is tied
+        ! to the structure, use it as the reference direction.
+        !
+        ! This makes the sign choice independent of previous
+        ! frames and independent of trajectory/block boundaries.
+        ! ========================================================
+
+        if (dot_product(e1,v1) < 0.0_8) then
+            e1 = -e1
+        end if
+
+
+        ! ========================================================
+        ! Projector onto plane perpendicular to e1
+        !
+        ! P1 = I - e1 e1^T
+        ! ========================================================
+
+        P1 = 0.0_8
+
+        do i = 1,3
+            P1(i,i) = 1.0_8
+        end do
+
+        do i = 1,3
+            do j = 1,3
+                P1(i,j) = P1(i,j) - e1(i)*e1(j)
+            end do
+        end do
+
+
+        ! ========================================================
+        ! Constrained second tensor
+        !
+        ! B2 = P1 A2 P1
+        !
+        ! The principal eigenvector of B2 maximizes
+        !
+        !   e2^T A2 e2
+        !
+        ! subject to
+        !
+        !   |e2| = 1
+        !   e2 . e1 = 0
+        ! ========================================================
+
+        B2 = matmul(P1, matmul(A2, P1))
+
+
+        ! ========================================================
+        ! Second basis vector
+        ! ========================================================
+
+        call principal_eigenvector_symmetric_3x3(B2, e2)
+
+        nrm = norm2(e2)
+
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e2 too small"
+        end if
+
+        e2 = e2/nrm
+
+
+        ! ========================================================
+        ! Numerical cleanup:
+        ! explicitly remove any tiny component along e1.
+        ! ========================================================
+
+        e2 = e2 - dot_product(e2,e1)*e1
+
+        nrm = norm2(e2)
+
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e2 degenerate"
+        end if
+
+        e2 = e2/nrm
+
+
+        ! ========================================================
+        ! Orient e2 relative to the instantaneous structural v2
+        !
+        ! Again, the sign is fixed locally from the structure,
+        ! not from the previous frame.
+        ! ========================================================
+
+        if (dot_product(e2,v2) < 0.0_8) then
+            e2 = -e2
+        end if
+
+
+        ! ========================================================
+        ! Third basis vector
+        !
+        ! Construct after the sign choices for e1 and e2 so that
+        ! the resulting basis is right-handed.
+        ! ========================================================
+
+        e3 = cross(e1,e2)
+
+        nrm = norm2(e3)
+
+        if (nrm <= 1.0e-12_8) then
+            error stop "build_smoothed_backbone_basis: e1 and e2 degenerate"
+        end if
+
+        e3 = e3/nrm
+
+
+        ! ========================================================
+        ! Store basis vectors as ROWS
+        !
+        ! rot(t) =
+        !
+        !   e1^T
+        !   e2^T
+        !   e3^T
+        !
+        ! so that
+        !
+        !   loc = matmul(rot,vec)
+        ! ========================================================
+
+        rots(1,:,t) = e1
+        rots(2,:,t) = e2
+        rots(3,:,t) = e3
+
+    end do
+
+end subroutine build_smoothed_backbone_basis
+
+
+subroutine build_smoothed_backbone_basis_old(lifted_tra, basis_index, &
+                                         tau_mem, dt, rots)
+
+    type(lifted_trajectory), intent(in)  :: lifted_tra
+    integer,                 intent(in)  :: basis_index
+    real(8),                 intent(in)  :: tau_mem
+    real(8),                 intent(in)  :: dt
+    real(8),                 intent(out) :: rots(:,:,:)
+
+    integer :: nframe, t, i, j
+
+    real(8) :: alpha
+    real(8) :: v1(3), v2(3)
+    real(8) :: A1(3,3), A2(3,3)
+    real(8) :: P1(3,3), B2(3,3)
+    real(8) :: e1(3), e2(3), e3(3)
+    real(8) :: nrm
+    real(8) :: prev_e1(3), prev_e2(3)
+    ! ============================================================
+    ! Dimensions / parameters
+    ! ============================================================
+   ! write(0,*) shape(lifted_tra%vec)
+    nframe = size(lifted_tra%vec,3)
+    if (size(rots,1) /= 3 .or. size(rots,2) /= 3 .or. &
+        size(rots,3) /= nframe) then
+        error stop "build_smoothed_backbone_basis: wrong rots dimensions"
+    end if
+    if (tau_mem <= 0.0_8) then
+        error stop "build_smoothed_backbone_basis: tau_mem <= 0"
+    end if
+    if (dt <= 0.0_8) then
+        error stop "build_smoothed_backbone_basis: dt <= 0"
+    end if
+    ! ============================================================
+    ! Exponential memory factor
+    
+    ! A(t) = alpha*A(t-dt)
+    !      + (1-alpha)*v(t)v(t)^T
+    ! ============================================================
+    alpha = exp(-dt/tau_mem)
+    ! ============================================================
+    ! Start with zero memory
+    ! ===========================================================
+    A1 = 0.0_8
+    A2 = 0.0_8
+    ! ============================================================
+    ! Main trajectory loop
+    ! ============================================================
+    do t = 1, nframe
+        ! ========================================================
+        ! Instantaneous v1
+        ! ========================================================
+
+        v1 = lifted_tra%vec(:,2*basis_index-1,t)
+       
        ! write(0,*) v1,'v1'
         
         nrm = norm2(v1)
@@ -1022,7 +1373,6 @@ subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
         end if
 
         v1 = v1/nrm
-
 
         ! ========================================================
         ! Instantaneous v2
@@ -1161,9 +1511,7 @@ subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
         !   e1^T
         !   e2^T
         !   e3^T
-        !
-        ! so that
-        
+
         ! loc = matmul(rot,vec)
         ! ========================================================
         rots(1,:,t) = e1
@@ -1175,7 +1523,7 @@ subroutine build_smoothed_backbone_basis(lifted_tra, basis_index, &
         prev_e1 = e1
         prev_e2 = e2
     end do
-end subroutine build_smoothed_backbone_basis
+end subroutine build_smoothed_backbone_basis_old
 
 
 
